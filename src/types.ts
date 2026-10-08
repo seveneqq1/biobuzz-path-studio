@@ -3,11 +3,19 @@ export type ResolvedInterpolation = Exclude<Interpolation, 'auto'>
 
 export interface Point2D { x: number; y: number }
 
+export type ActionType = 'shoot' | 'intake' | 'transfer' | 'flowerIntake' | 'wait'
+
+export interface PathAction {
+  type: ActionType
+  durationMs?: number
+}
+
 export interface Waypoint extends Point2D {
   id: string
   heading: number
   interpolation: Interpolation
   controlWeight: number
+  action?: PathAction
 }
 
 export interface SegmentDecision {

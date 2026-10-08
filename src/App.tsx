@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
-import { Bug, ChevronDown, Download, Hexagon, RotateCcw, Sparkles, Undo2 } from 'lucide-react'
+import { Bug, ChevronDown, Download, Hexagon, Route, RotateCcw, Sparkles, Undo2 } from 'lucide-react'
 import { FieldCanvas } from './components/FieldCanvas'
 import { Inspector } from './components/Inspector'
 import { CodePanel } from './components/CodePanel'
-import { seedWaypoints } from './lib/geometry'
+import { optimizeWaypoints, seedWaypoints } from './lib/geometry'
 import { analyzePath } from './lib/optimizer'
 import { downloadJava, generateJava } from './lib/codegen'
 import type { CanvasTool, Waypoint } from './types'
@@ -15,6 +15,7 @@ export default function App() {
   const [tool, setTool] = useState<CanvasTool>('select')
   const [snap, setSnap] = useState(false)
   const [optimized, setOptimized] = useState(false)
+  const [pathOptimizationLabel, setPathOptimizationLabel] = useState('Optimize path')
   const decisions = useMemo(() => analyzePath(points), [points])
   const code = useMemo(() => generateJava(points, decisions), [points, decisions])
   const selectedIndex = points.findIndex(point => point.id === selectedId)
@@ -41,6 +42,13 @@ export default function App() {
     setOptimized(true)
     window.setTimeout(() => setOptimized(false), 1700)
   }
+  const optimizePath = () => {
+    const before = points.length
+    const next = optimizeWaypoints(points)
+    updatePoints(next)
+    setPathOptimizationLabel(next.length < before ? `${before} → ${next.length} points` : 'Already minimal')
+    window.setTimeout(() => setPathOptimizationLabel('Optimize path'), 2000)
+  }
 
   return <div className="app-shell">
     <header className="topbar">
@@ -50,6 +58,7 @@ export default function App() {
       </div>
       <div className="header-controls">
         <button className="season-select"><span className="status-dot" />2026–27 BIOBUZZ field<ChevronDown size={15} /></button>
+        <button className="secondary-button path-optimize-button" onClick={optimizePath}><Route size={16} />{pathOptimizationLabel}</button>
         <button className="secondary-button" onClick={optimize}><Sparkles size={16} />{optimized ? 'Optimized' : 'Optimize interpolations'}</button>
         <button className="primary-button" onClick={() => downloadJava(code)}><Download size={16} />Export Java</button>
       </div>
@@ -58,7 +67,7 @@ export default function App() {
     <main className="workspace">
       <div className="canvas-column">
         <div className="section-bar">
-          <div><span className="live-dot" />Path 01 <small>{Math.max(0, points.length - 1)} segments</small></div>
+          <div><span className="live-dot" />Path 01 <small>{Math.max(0, points.length - 1)} segments · {points.filter(point => point.action).length} commands</small></div>
           <div className="section-actions">
             <button onClick={undo} disabled={!history.length} title="Undo"><Undo2 size={15} />Undo</button>
             <button onClick={() => { updatePoints(seedWaypoints()); setSelectedId(null) }} title="Reset demo path"><RotateCcw size={15} />Reset</button>

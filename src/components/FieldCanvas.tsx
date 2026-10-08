@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { Arrow, Circle, Group, Image, Layer, Line, Shape, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
 import { Crosshair, Hand, MousePointer2, PenTool, RotateCcw, ScanLine, ZoomIn, ZoomOut } from 'lucide-react'
-import type { CanvasTool, Point2D, SegmentDecision, Waypoint } from '../types'
+import type { ActionType, CanvasTool, PathAction, Point2D, SegmentDecision, Waypoint } from '../types'
 import { canvasToWorld, clamp, controls, FIELD_PIXELS, normalizeDegrees, simplify, tangentDegrees, worldToCanvas } from '../lib/geometry'
 
 interface Props {
@@ -24,6 +25,17 @@ const toolItems: { id: CanvasTool; label: string; icon: typeof MousePointer2 }[]
   { id: 'pan', label: 'Pan', icon: Hand },
 ]
 
+const actionKeys: { key: string; type: ActionType; label: string; color: string }[] = [
+  { key: '1', type: 'shoot', label: 'Shoot', color: '#ff6f77' },
+  { key: '2', type: 'intake', label: 'Intake', color: '#6ee7f2' },
+  { key: '3', type: 'transfer', label: 'Transfer', color: '#b69cff' },
+  { key: '4', type: 'flowerIntake', label: 'Flower', color: '#f2c94c' },
+  { key: '5', type: 'wait', label: 'Hold: wait', color: '#ffffff' },
+]
+
+const actionMeta = Object.fromEntries(actionKeys.map(action => [action.type, action])) as Record<ActionType, typeof actionKeys[number]>
+interface PendingAction { point: Point2D; sampleIndex: number; action: PathAction }
+
 export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolChange, onSnapChange, onPointsChange, onSelect }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
@@ -33,7 +45,56 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
   const [cursor, setCursor] = useState<Point2D>({ x: 0, y: 0 })
   const [stroke, setStroke] = useState<Point2D[]>([])
   const [drawing, setDrawing] = useState(false)
+  const [pendingActions, setPendingActions] = useState<PendingAction[]>([])
+  const [activeWait, setActiveWait] = useState(false)
+  const [actionFlash, setActionFlash] = useState<string | null>(null)
   const [fieldImage, setFieldImage] = useState<HTMLImageElement | null>(null)
+  const strokeRef = useRef<Point2D[]>([])
+  const drawingRef = useRef(false)
+  const pendingActionsRef = useRef<PendingAction[]>([])
+  const waitStartRef = useRef<{ startedAt: number; point: Point2D; sampleIndex: number } | null>(null)
+
+  const registerAction = (entry: PendingAction) => {
+    pendingActionsRef.current = [...pendingActionsRef.current, entry]
+    setPendingActions(pendingActionsRef.current)
+    const meta = actionMeta[entry.action.type]
+    setActionFlash(entry.action.type === 'wait' ? `Wait ${entry.action.durationMs} ms added` : `${meta.label} added`)
+    window.setTimeout(() => setActionFlash(null), 900)
+  }
+
+  const finishWait = () => {
+    const waiting = waitStartRef.current
+    if (!waiting) return
+    const durationMs = Math.max(100, Math.round((Date.now() - waiting.startedAt) / 100) * 100)
+    registerAction({ point: waiting.point, sampleIndex: waiting.sampleIndex, action: { type: 'wait', durationMs } })
+    waitStartRef.current = null
+    setActiveWait(false)
+  }
+
+  useEffect(() => {
+    const editableTarget = (target: EventTarget | null) => target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement
+    const keyDown = (event: KeyboardEvent) => {
+      if (!drawingRef.current || editableTarget(event.target)) return
+      const binding = actionKeys.find(action => action.key === event.key)
+      if (!binding || event.repeat) return
+      const currentStroke = strokeRef.current
+      const point = currentStroke.at(-1)
+      if (!point) return
+      event.preventDefault()
+      if (binding.type === 'wait') {
+        waitStartRef.current = { startedAt: Date.now(), point, sampleIndex: currentStroke.length - 1 }
+        setActiveWait(true)
+      } else {
+        registerAction({ point, sampleIndex: currentStroke.length - 1, action: { type: binding.type } })
+      }
+    }
+    const keyUp = (event: KeyboardEvent) => {
+      if (event.key === '5' && waitStartRef.current) { event.preventDefault(); finishWait() }
+    }
+    window.addEventListener('keydown', keyDown)
+    window.addEventListener('keyup', keyUp)
+    return () => { window.removeEventListener('keydown', keyDown); window.removeEventListener('keyup', keyUp) }
+  })
 
   useEffect(() => {
     const image = new window.Image()
@@ -73,7 +134,11 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
     if (!local) return
     if (tool === 'draw') {
       setDrawing(true)
+      drawingRef.current = true
       setStroke([local])
+      strokeRef.current = [local]
+      setPendingActions([])
+      pendingActionsRef.current = []
       onSelect(null)
     } else if (tool === 'waypoint') {
       const world = canvasToWorld(local, snap)
@@ -94,18 +159,38 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
     const local = pointerInField()
     if (!local) return
     const last = stroke.at(-1)
-    if (!last || Math.hypot(local.x - last.x, local.y - last.y) > 7) setStroke(current => [...current, local])
+    if (!last || Math.hypot(local.x - last.x, local.y - last.y) > 7) setStroke(current => {
+      const next = [...current, local]
+      strokeRef.current = next
+      return next
+    })
   }
 
   const handleUp = () => {
     if (!drawing) return
+    if (waitStartRef.current) finishWait()
     setDrawing(false)
-    const sampled = simplify(stroke, 9).map(point => canvasToWorld(point, snap))
-    if (sampled.length >= 2) {
-      const next = sampled.map((point, index) => ({
-        ...point,
+    drawingRef.current = false
+    const rawStroke = strokeRef.current
+    const actions = pendingActionsRef.current.sort((a, b) => a.sampleIndex - b.sampleIndex)
+    const sampled: { point: Point2D; action?: PathAction }[] = []
+    let startIndex = 0
+    for (const marker of actions) {
+      const endIndex = clamp(marker.sampleIndex, startIndex, rawStroke.length - 1)
+      const section = simplify(rawStroke.slice(startIndex, endIndex + 1), 9)
+      sampled.push(...section.slice(sampled.length ? 1 : 0).map(point => ({ point })))
+      if (sampled.length) sampled[sampled.length - 1].action = marker.action
+      startIndex = endIndex
+    }
+    const tail = simplify(rawStroke.slice(startIndex), 9)
+    sampled.push(...tail.slice(sampled.length ? 1 : 0).map(point => ({ point })))
+    const worldSamples = sampled.map(sample => ({ ...sample, point: canvasToWorld(sample.point, snap) }))
+    if (worldSamples.length >= 2) {
+      const next = worldSamples.map((sample, index) => ({
+        ...sample.point,
+        action: sample.action,
         id: crypto.randomUUID(),
-        heading: tangentDegrees(point, sampled[index + 1] ?? sampled[index - 1] ?? point),
+        heading: tangentDegrees(sample.point, worldSamples[index + 1]?.point ?? worldSamples[index - 1]?.point ?? sample.point),
         interpolation: 'auto' as const,
         controlWeight: 1,
       }))
@@ -113,6 +198,9 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
       onSelect(next[0].id)
     }
     setStroke([])
+    strokeRef.current = []
+    setPendingActions([])
+    pendingActionsRef.current = []
   }
 
   const resetView = () => {
@@ -141,6 +229,10 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
         <button className="tool" onClick={resetView} title="Reset view"><RotateCcw size={17} /></button>
       </div>
     </div>
+    <div className="action-rail" aria-label="Drawing action shortcuts">
+      {actionKeys.map(action => <div key={action.key} className={activeWait && action.key === '5' ? 'action-key recording' : 'action-key'} style={{ '--action-color': action.color } as CSSProperties}><kbd>{action.key}</kbd><span>{action.label}</span></div>)}
+    </div>
+    {actionFlash && <div className="action-flash">{actionFlash}</div>}
     <div className="coordinate-readout"><span>X {cursor.x.toFixed(1)}</span><span>Y {cursor.y.toFixed(1)}</span><small>in</small></div>
     <Stage
       ref={stageRef} width={size.width} height={size.height}
@@ -180,11 +272,19 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
           </Group>
         })}
         {stroke.length > 1 && <Line points={stroke.flatMap(point => [point.x, point.y])} stroke="#f2c94c" strokeWidth={5} lineCap="round" lineJoin="round" dash={[10, 6]} listening={false} />}
+        {pendingActions.map((marker, index) => {
+          const meta = actionMeta[marker.action.type]
+          return <Group key={`${marker.sampleIndex}-${index}`} x={marker.point.x} y={marker.point.y} listening={false}>
+            <Circle radius={14} fill="#07161f" stroke={meta.color} strokeWidth={3} />
+            <Text text={meta.key} x={-10} y={-8} width={20} height={16} align="center" fill={meta.color} fontSize={12} fontStyle="bold" />
+          </Group>
+        })}
         {points.map((point, index) => {
           const canvas = worldToCanvas(point)
           const radians = -point.heading * Math.PI / 180
           const arrowEnd = { x: canvas.x + Math.cos(radians) * 42, y: canvas.y + Math.sin(radians) * 42 }
           const selected = point.id === selectedId
+          const action = point.action ? actionMeta[point.action.type] : null
           return <Group key={point.id}>
             {selected && <Line points={[canvas.x, canvas.y, arrowEnd.x, arrowEnd.y]} stroke="#6ee7f2" strokeWidth={2} dash={[5, 4]} listening={false} />}
             <Arrow points={[canvas.x, canvas.y, arrowEnd.x, arrowEnd.y]} stroke={selected ? '#6ee7f2' : '#fff3c6'} fill={selected ? '#6ee7f2' : '#fff3c6'} pointerLength={8} pointerWidth={8} strokeWidth={3} listening={false} />
@@ -209,6 +309,10 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
               onDragEnd={event => event.target.position(arrowEnd)}
             />}
             <Text x={canvas.x - 22} y={canvas.y + 14} width={44} align="center" text={`${index + 1}`} fill="#ffffff" fontSize={11} fontStyle="bold" listening={false} />
+            {action && <Group x={canvas.x - 14} y={canvas.y - 22} listening={false}>
+              <Circle radius={11} fill="#07161f" stroke={action.color} strokeWidth={2.5} />
+              <Text text={action.key} x={-8} y={-6} width={16} align="center" fill={action.color} fontSize={10} fontStyle="bold" />
+            </Group>}
           </Group>
         })}
       </Layer>

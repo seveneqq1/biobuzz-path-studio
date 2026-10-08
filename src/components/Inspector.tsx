@@ -1,5 +1,5 @@
-import { Gauge, Info, MapPin, RotateCw, SlidersHorizontal, Trash2 } from 'lucide-react'
-import type { Interpolation, SegmentDecision, Waypoint } from '../types'
+import { Gauge, Info, MapPin, RotateCw, SlidersHorizontal, Timer, Trash2, Zap } from 'lucide-react'
+import type { ActionType, Interpolation, SegmentDecision, Waypoint } from '../types'
 import { clamp } from '../lib/geometry'
 
 interface Props {
@@ -38,6 +38,23 @@ export function Inspector({ point, index, decision, onChange, onDelete }: Props)
     <div className="inspector-heading">
       <div><span>Waypoint {index + 1}</span><h2>Pose inspector</h2></div>
       <button className="icon-danger" onClick={onDelete} aria-label="Delete waypoint" title="Delete waypoint"><Trash2 size={17} /></button>
+    </div>
+
+    <div className="field-group command-inspector">
+      <div className="group-title"><Zap size={15} /><span>Route command</span><small>runs after arrival</small></div>
+      <select aria-label="Route command" value={point.action?.type ?? 'none'} onChange={event => {
+        const type = event.target.value as ActionType | 'none'
+        onChange({ action: type === 'none' ? undefined : { type, ...(type === 'wait' ? { durationMs: 500 } : {}) } })
+      }}>
+        <option value="none">No command</option>
+        <option value="shoot">1 · Shoot</option>
+        <option value="intake">2 · Intake</option>
+        <option value="transfer">3 · Transfer</option>
+        <option value="flowerIntake">4 · Flower intake</option>
+        <option value="wait">5 · Wait</option>
+      </select>
+      {point.action?.type === 'wait' && <label className="wait-input"><Timer size={14} /><input type="number" min="100" step="100" value={point.action.durationMs ?? 100} onChange={event => onChange({ action: { type: 'wait', durationMs: Math.max(100, Math.round(Number(event.target.value) / 100) * 100) } })} /><span>ms</span></label>}
+      {point.action && <p>The next path chain starts only after this command reports completion.</p>}
     </div>
 
     <div className="field-group">

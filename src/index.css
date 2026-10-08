@@ -60,6 +60,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .coordinate-readout { position: absolute; z-index: 4; top: 12px; right: 12px; display: flex; align-items: baseline; gap: 12px; padding: 8px 10px; border: 1px solid #31505c; background: rgba(7, 22, 31, .88); border-radius: 7px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; font-weight: 700; }
 .coordinate-readout span { min-width: 49px; }
 .coordinate-readout small { color: var(--muted); }
+.action-rail { position: absolute; z-index: 5; top: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 3px; padding: 4px; border: 1px solid #31505c; background: rgba(7, 22, 31, .92); border-radius: 8px; box-shadow: 0 10px 24px rgba(0,0,0,.24); }
+.action-key { display: flex; align-items: center; gap: 5px; height: 30px; padding: 0 7px 0 4px; color: #9eb0b5; border-radius: 5px; font-size: 9px; white-space: nowrap; }
+.action-key kbd { min-width: 21px; height: 21px; display: grid; place-items: center; color: var(--action-color); background: #07151d; border: 1px solid color-mix(in srgb, var(--action-color) 58%, #233b45); border-radius: 4px; font-family: "SFMono-Regular", Consolas, monospace; font-weight: 800; }
+.action-key.recording { color: #fff; background: rgba(255,255,255,.08); }
+.action-key.recording kbd { animation: wait-pulse .7s ease-in-out infinite alternate; }
+.action-flash { position: absolute; z-index: 6; top: 53px; left: 50%; transform: translateX(-50%); padding: 6px 10px; color: #07161f; background: var(--cyan); border-radius: 5px; font-size: 10px; font-weight: 800; box-shadow: 0 6px 16px rgba(0,0,0,.25); pointer-events: none; }
+@keyframes wait-pulse { to { background: #fff; color: #07161f; box-shadow: 0 0 0 4px rgba(255,255,255,.12); } }
 .canvas-hint { position: absolute; z-index: 4; left: 50%; bottom: 13px; transform: translateX(-50%); padding: 7px 11px; border: 1px solid rgba(130,160,168,.25); background: rgba(6,19,27,.82); color: #b0c0c4; border-radius: 6px; font-size: 11px; white-space: nowrap; pointer-events: none; }
 .field-credit { position: absolute; z-index: 4; right: 12px; bottom: 13px; padding: 5px 8px; border: 1px solid rgba(130,160,168,.22); background: rgba(6,19,27,.8); color: #839aa1; border-radius: 5px; font-size: 9px; text-decoration: none; }
 .field-credit:hover { color: #dce8e8; border-color: #496873; }
@@ -97,6 +104,14 @@ select:disabled { opacity: .45; }
 .decision-note p { margin: 3px 0 0; font-size: 10px; line-height: 1.45; }
 .decision-note.manual { border-color: var(--amber); background: rgba(242, 201, 76, .07); }
 .decision-note.manual svg { color: var(--amber); }
+.command-inspector { padding-top: 12px; }
+.command-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px; background: rgba(242, 201, 76, .08); border-left: 2px solid var(--amber); text-transform: capitalize; }
+.command-row strong { font-size: 12px; color: #fff0bb; }
+.command-row button { border: 0; background: transparent; color: #d08b91; cursor: pointer; font-size: 10px; }
+.wait-input { display: grid; grid-template-columns: 22px 1fr 25px; align-items: center; margin-top: 8px; color: var(--muted); }
+.wait-input input { height: 32px; }
+.wait-input span { padding-left: 5px; font-size: 10px; }
+.command-inspector > p { margin: 8px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .range-labels { display: flex; justify-content: space-between; margin-top: 4px; color: #637b83; font-size: 9px; }
 .inspector-empty { height: 100%; min-height: 270px; display: grid; place-content: center; justify-items: center; padding: 30px; text-align: center; }
 .empty-orbit { width: 52px; height: 52px; display: grid; place-items: center; border: 1px dashed #45616c; border-radius: 50%; color: var(--amber); }
@@ -129,15 +144,19 @@ footer span { color: #a7b7bb; } footer b { color: #c9d5d5; font-weight: 600; } f
   .canvas-column { height: 72vh; min-height: 540px; }
   .right-column { grid-template-rows: auto 520px; }
   .inspector-panel { max-height: none; }
+  .action-rail { top: auto; bottom: 48px; }
 }
 
 @media (max-width: 560px) {
   .brand p, .secondary-button { display: none; }
+  .path-optimize-button { display: flex; }
   .primary-button { padding: 0 9px; }
   .workspace { grid-template-columns: minmax(0, 1fr); }
   .canvas-column { min-height: 500px; height: 68vh; }
   .canvas-hint { max-width: 86%; overflow: hidden; text-overflow: ellipsis; }
   .field-credit { display: none; }
+  .action-rail { max-width: calc(100% - 24px); overflow-x: auto; }
+  .action-key span { display: none; }
   footer { justify-content: center; } footer span, footer i, footer b:nth-of-type(n+2) { display: none; }
 }
 
