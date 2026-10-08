@@ -17,4 +17,4 @@ npm run dev
 - Manual interpolation overrides and Bézier tension controls
 - Live Pedro Pathing 3 Java preview, clipboard copy and `.java` download
 
-The included field art is a high-resolution vector schematic based on the official 2026–2027 field layout and is intended for path planning, not construction measurements.
+The included 4096 × 4096 MeepMeep-compatible BIOBUZZ field image was created by [FTC Team Juice 16236](https://www.reddit.com/r/FTC/comments/1weleaj/biobuzz_custom_field_images_meepmeep_compatible/) and is used with the attribution requested by its creator. Field placement was checked against the official FIRST Event Field Setup Guide. Use official FIRST materials—not this planning image—for construction measurements.

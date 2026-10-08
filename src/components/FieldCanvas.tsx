@@ -37,7 +37,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
 
   useEffect(() => {
     const image = new window.Image()
-    image.src = '/biobuzz-field.svg'
+    image.src = '/biobuzz-field.png'
     image.onload = () => setFieldImage(image)
   }, [])
 
@@ -213,6 +213,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
         })}
       </Layer>
     </Stage>
+    <a className="field-credit" href="https://www.reddit.com/r/FTC/comments/1weleaj/biobuzz_custom_field_images_meepmeep_compatible/" target="_blank" rel="noreferrer">Field art: Team Juice 16236</a>
     <div className="canvas-hint">{tool === 'draw' ? 'Drag to sketch a new path' : tool === 'waypoint' ? 'Click the field to add a waypoint' : tool === 'pan' ? 'Drag to pan · scroll to zoom' : 'Drag nodes · drag the cyan handle to rotate'}</div>
   </section>
 }

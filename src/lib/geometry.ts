@@ -67,9 +67,10 @@ export function simplify(points: Point2D[], tolerance = 3): Point2D[] {
 export function seedWaypoints(): Waypoint[] {
   return [
     { id: crypto.randomUUID(), x: 18, y: 18, heading: 90, interpolation: 'auto', controlWeight: 1 },
-    { id: crypto.randomUUID(), x: 37, y: 50, heading: 67, interpolation: 'auto', controlWeight: 1 },
-    { id: crypto.randomUUID(), x: 74, y: 70, heading: 8, interpolation: 'auto', controlWeight: 1 },
-    { id: crypto.randomUUID(), x: 111, y: 92, heading: 38, interpolation: 'auto', controlWeight: 1 },
-    { id: crypto.randomUUID(), x: 126, y: 122, heading: 90, interpolation: 'auto', controlWeight: 1 },
+    { id: crypto.randomUUID(), x: 34, y: 42, heading: 66, interpolation: 'auto', controlWeight: 1 },
+    { id: crypto.randomUUID(), x: 43, y: 69, heading: 88, interpolation: 'auto', controlWeight: 1 },
+    { id: crypto.randomUUID(), x: 45, y: 103, heading: 72, interpolation: 'auto', controlWeight: 1 },
+    { id: crypto.randomUUID(), x: 75, y: 119, heading: 18, interpolation: 'auto', controlWeight: 1 },
+    { id: crypto.randomUUID(), x: 122, y: 119, heading: 0, interpolation: 'auto', controlWeight: 1 },
   ]
 }
