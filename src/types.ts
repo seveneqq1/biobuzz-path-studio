@@ -8,6 +8,8 @@ export type ActionType = 'shoot' | 'intake' | 'transfer' | 'flowerIntake' | 'wai
 export interface PathAction {
   type: ActionType
   durationMs?: number
+  composition?: 'sequential' | 'parallel' | 'deadline'
+  timeoutMs?: number
 }
 
 export interface Waypoint extends Point2D {

@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
-import { Bug, ChevronDown, Download, Hexagon, Route, RotateCcw, Sparkles, Undo2 } from 'lucide-react'
+import { Bug, Download, Hexagon, Route, RotateCcw, Sparkles, Undo2 } from 'lucide-react'
 import { FieldCanvas } from './components/FieldCanvas'
 import { Inspector } from './components/Inspector'
 import { CodePanel } from './components/CodePanel'
-import { seedWaypoints } from './lib/geometry'
+import { editWaypoint, seedWaypoints } from './lib/geometry'
 import { optimizeCurves } from './lib/curveFit'
 import { analyzePath } from './lib/optimizer'
 import { downloadJava, generateJava } from './lib/codegen'
@@ -30,8 +30,7 @@ export default function App() {
   }
   const updateSelected = (changes: Partial<Waypoint>) => {
     if (!selectedId) return
-    const geometric = changes.x !== undefined || changes.y !== undefined || changes.controlWeight !== undefined
-    updatePoints(points.map(point => ({ ...point, ...(point.id === selectedId ? changes : {}), ...(geometric ? {curve:undefined}: {}) })))
+    updatePoints(editWaypoint(points,selectedId,changes))
   }
   const undo = () => {
     const previous = history.at(-1)
@@ -56,12 +55,12 @@ export default function App() {
     <header className="topbar">
       <div className="brand">
         <div className="brand-mark"><Hexagon size={25} /><Bug size={14} /></div>
-        <div><h1>BIOBUZZ <span>Path Studio</span></h1><p>Pedro Pathing 3 route composer</p></div>
+        <div><h1>BIOBUZZ <span>Path Studio</span></h1><p>FTC autonomous workbench</p></div>
       </div>
       <div className="header-controls">
-        <button className="season-select"><span className="status-dot" />2026–27 BIOBUZZ field<ChevronDown size={15} /></button>
+        <span className="season-select">2026–27 field</span>
         <button className="secondary-button path-optimize-button" onClick={optimizePath}><Route size={16} />{pathOptimizationLabel}</button>
-        <button className="secondary-button" onClick={optimize}><Sparkles size={16} />{optimized ? 'Optimized' : 'Optimize interpolations'}</button>
+        <button className="secondary-button interpolation-optimize-button" aria-label="Optimize interpolations" onClick={optimize}><Sparkles size={16} /><span className="desktop-label">{optimized ? 'Optimized' : 'Optimize interpolations'}</span><span className="mobile-label">{optimized ? 'Done' : 'Headings'}</span></button>
         <button className="primary-button" onClick={() => downloadJava(code)}><Download size={16} />Export Java</button>
       </div>
     </header>
@@ -69,7 +68,7 @@ export default function App() {
     <main className="workspace">
       <div className="canvas-column">
         <div className="section-bar">
-          <div><span className="live-dot" />Path 01 <small>{Math.max(0, points.length - 1)} segments · {points.filter(point => point.action).length} commands</small></div>
+          <div><Route size={15}/>Your route <small>{Math.max(0, points.length - 1)} segments · {points.filter(point => point.action).length} commands</small></div>
           <div className="section-actions">
             <button onClick={undo} disabled={!history.length} title="Undo"><Undo2 size={15} />Undo</button>
             <button onClick={() => { updatePoints(seedWaypoints()); setSelectedId(null) }} title="Reset demo path"><RotateCcw size={15} />Reset</button>

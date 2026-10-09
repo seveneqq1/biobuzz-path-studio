@@ -4,19 +4,22 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --import tsx --test src/lib/physics.test.ts",
+    "test": "node --import tsx --test src/lib/physics.test.ts src/lib/codegen.test.ts",
+    "test:java": "node --import tsx scripts/verify-java.ts",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint . --max-warnings 0",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "latest",
     "konva": "latest",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
     "react-konva": "latest",
+    "three": "^0.186.1",
     "vite": "latest"
   },
   "devDependencies": {

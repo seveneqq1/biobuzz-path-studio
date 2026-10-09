@@ -53,8 +53,20 @@ export function Inspector({ point, index, decision, onChange, onDelete }: Props)
         <option value="flowerIntake">4 · Flower intake</option>
         <option value="wait">5 · Wait</option>
       </select>
-      {point.action?.type === 'wait' && <label className="wait-input"><Timer size={14} /><input type="number" min="100" step="100" value={point.action.durationMs ?? 100} onChange={event => onChange({ action: { type: 'wait', durationMs: Math.max(100, Math.round(Number(event.target.value) / 100) * 100) } })} /><span>ms</span></label>}
-      {point.action && <p>The next path chain starts only after this command reports completion.</p>}
+      {point.action?.type === 'wait' && <label className="wait-input"><Timer size={14} /><input aria-label="Wait duration" type="number" min="100" step="100" value={point.action.durationMs ?? 100} onChange={event => onChange({ action: { ...point.action!, durationMs: Math.max(100, Math.round(Number(event.target.value) / 100) * 100) } })} /><span>ms</span></label>}
+      {point.action && <>
+        <label className="command-label">Ivy composition
+          <select aria-label="Ivy composition" value={point.action.composition ?? 'sequential'} onChange={event => onChange({action: {...point.action!, composition: event.target.value as 'sequential' | 'parallel' | 'deadline'}})}>
+            <option value="sequential">Sequential · then drive</option>
+            <option value="parallel">Parallel · with next path</option>
+            <option value="deadline">Deadline · until next path ends</option>
+          </select>
+        </label>
+        {point.action.type !== 'wait' && point.action.type !== 'intake' && <label className="command-label">Timeout race (0 = none)
+          <div className="wait-input"><Timer size={14}/><input aria-label="Command timeout" type="number" min="0" step="100" value={point.action.timeoutMs ?? 0} onChange={event => onChange({action: {...point.action!, timeoutMs: Math.max(0, Math.round(Number(event.target.value) / 100) * 100)}})}/><span>ms</span></div>
+        </label>}
+        <p>{point.action.composition === 'parallel' ? 'Starts here alongside the next path. Both must finish before the next command.' : point.action.composition === 'deadline' ? 'The next path is the deadline; unfinished actions are cancelled and cleaned up.' : point.action.type === 'intake' ? 'Instant command enables intake, then driving continues. Intake stays on until shooting or the end.' : 'The next path starts after this command finishes.'} Concurrent modes on the final waypoint run sequentially.</p>
+      </>}
     </div>
 
     <div className="field-group">

@@ -5,7 +5,7 @@ import { Arrow, Circle, Group, Image, Layer, Line, Shape, Stage, Text } from 're
 import type Konva from 'konva'
 import { Crosshair, Hand, MousePointer2, PenTool, RotateCcw, ScanLine, ZoomIn, ZoomOut } from 'lucide-react'
 import type { ActionType, CanvasTool, PathAction, Point2D, SegmentDecision, Waypoint } from '../types'
-import { canvasToWorld, clamp, controls, FIELD_PIXELS, normalizeDegrees, simplify, tangentDegrees, worldToCanvas } from '../lib/geometry'
+import { canvasToWorld, clamp, controls, editWaypoint, FIELD_PIXELS, normalizeDegrees, simplify, tangentDegrees, worldToCanvas } from '../lib/geometry'
 
 interface Props {
   points: Waypoint[]
@@ -109,7 +109,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
     const resize = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect
       setSize({ width, height })
-      const fit = Math.min((width - 56) / FIELD_PIXELS, (height - 76) / FIELD_PIXELS)
+      const fit = Math.min((width - 56) / FIELD_PIXELS, (height - (width<560?210:170)) / FIELD_PIXELS)
       setScale(clamp(fit, 0.38, 1.4))
       setPosition({ x: Math.max(28, (width - FIELD_PIXELS * fit) / 2), y: 24 })
     })
@@ -206,7 +206,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
   }
 
   const resetView = () => {
-    const fit = Math.min((size.width - 56) / FIELD_PIXELS, (size.height - 76) / FIELD_PIXELS)
+    const fit = Math.min((size.width - 56) / FIELD_PIXELS, (size.height - (size.width<560?210:170)) / FIELD_PIXELS)
     setScale(fit)
     setPosition({ x: Math.max(28, (size.width - FIELD_PIXELS * fit) / 2), y: 24 })
   }
@@ -217,9 +217,9 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
     return { index, point, next, c1, c2 }
   }), [points])
 
-  const updatePoint = (id: string, changes: Partial<Waypoint>) => onPointsChange(points.map(p => ({...p,...(p.id===id?changes:{}),...(changes.x!==undefined||changes.y!==undefined?{curve:undefined}:{})})))
+  const updatePoint = (id: string, changes: Partial<Waypoint>) => onPointsChange(editWaypoint(points,id,changes))
 
-  return <section className="field-panel" ref={wrapRef} aria-label="Interactive BIOBUZZ field">
+  return <section className="field-panel" ref={wrapRef} data-view={simulation.threeD?'3d':'2d'} aria-label="Interactive BIOBUZZ field">
     <div className="canvas-tools" role="toolbar" aria-label="Canvas tools">
       <div className="tool-cluster">
         {toolItems.map(item => <button key={item.id} className={tool === item.id ? 'tool active' : 'tool'} onClick={() => onToolChange(item.id)} title={item.label} aria-label={item.label}><item.icon size={17} /></button>)}
@@ -257,7 +257,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
         setPosition({ x: position.x + event.target.x(), y: position.y + event.target.y() })
         event.target.position({ x: 0, y: 0 })
       }}
-      style={{ cursor: tool === 'draw' ? 'crosshair' : tool === 'pan' ? 'grab' : 'default' }}
+      style={{ display:simulation.threeD?'none':undefined, cursor: tool === 'draw' ? 'crosshair' : tool === 'pan' ? 'grab' : 'default' }}
     >
       <Layer x={position.x} y={position.y} scaleX={scale} scaleY={scale}>
         <Image image={fieldImage ?? undefined} width={FIELD_PIXELS} height={FIELD_PIXELS} listening={false} />
@@ -269,8 +269,8 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
           return <Group key={next.id}>
             <Shape sceneFunc={(ctx, shape) => { ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y); ctx.fillStrokeShape(shape) }} stroke="#09141b" strokeWidth={11} lineCap="round" listening={false} />
             <Shape sceneFunc={(ctx, shape) => { ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y); ctx.fillStrokeShape(shape) }} stroke={selected ? '#6ee7f2' : '#f2c94c'} strokeWidth={5} lineCap="round" dash={decisions[index]?.type === 'piecewise' ? [16, 7] : undefined} listening={false} />
-            <Text x={(p0.x + p3.x) / 2 - 13} y={(p0.y + p3.y) / 2 - 12} text={`${index + 1}`} width={26} height={24} align="center" verticalAlign="middle" fill="#08161f" fontSize={13} fontStyle="bold" listening={false} />
             <Circle x={(p0.x + p3.x) / 2} y={(p0.y + p3.y) / 2} radius={12} fill="#f2c94c" stroke="#0d1e28" strokeWidth={2} listening={false} />
+            <Text x={(p0.x + p3.x) / 2 - 13} y={(p0.y + p3.y) / 2 - 12} text={`${index + 1}`} width={26} height={24} align="center" verticalAlign="middle" fill="#08161f" fontSize={13} fontStyle="bold" listening={false} />
           </Group>
         })}
         {stroke.length > 1 && <Line points={stroke.flatMap(point => [point.x, point.y])} stroke="#f2c94c" strokeWidth={5} lineCap="round" lineJoin="round" dash={[10, 6]} listening={false} />}
@@ -320,6 +320,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
         {simulation.overlay}
       </Layer>
     </Stage>
+    {simulation.scene}
     {simulation.hud}
     <a className="field-credit" href="https://www.reddit.com/r/FTC/comments/1weleaj/biobuzz_custom_field_images_meepmeep_compatible/" target="_blank" rel="noreferrer">Field art: Team Juice 16236</a>
     <div className="canvas-hint">{tool === 'draw' ? 'Drag to sketch a new path' : tool === 'waypoint' ? 'Click the field to add a waypoint' : tool === 'pan' ? 'Drag to pan · scroll to zoom' : 'Drag nodes · drag the cyan handle to rotate'}</div>

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Circle, Group, Image, Line, Rect, Text } from 'react-konva'
-import { Bot, Pause, Play, RotateCcw, Settings2 } from 'lucide-react'
+import { Box, Map, Pause, Play, RotateCcw, Settings2, X } from 'lucide-react'
 import type { Waypoint } from '../types'
 import { worldToCanvas } from '../lib/geometry'
 import { defaultConfig, flowers, hiveCenters, profile, resetSimulation, stepSimulation } from '../lib/simulation'
 import type { RobotConfig } from '../lib/simulation'
+import { cellOpening, pieceRadius } from '../lib/hivePhysics'
+import { ThreePreview } from './ThreePreview'
 
 const fields: {key:Exclude<keyof RobotConfig,'alliance'|'autoAim'>;label:string;min:number;max:number;step:number}[]=[
   {key:'rpm',label:'Motor output RPM',min:1,max:6000,step:1},
@@ -39,12 +41,21 @@ function robotPNG() {
 }
 
 export function useSimulation(points:Waypoint[]) {
+  const dock=useRef<HTMLDivElement>(null)
   const [enabled,setEnabled]=useState(false),[running,setRunning]=useState(false),[settings,setSettings]=useState(false)
+  const [threeD,setThreeD]=useState(false)
   const [config,setConfig]=useState(defaultConfig),[speed,setSpeed]=useState(1)
   const route=useMemo(()=>profile(points,config),[points,config])
   const engine=useRef(resetSimulation(points,config))
   const [view,setView]=useState(()=>resetSimulation(points,config))
   const [sprite,setSprite]=useState<HTMLImageElement>()
+  useEffect(()=>{
+    const element=dock.current
+    if(!element)return
+    const resize=()=>element.parentElement?.style.setProperty('--dock-height',`${element.offsetHeight}px`)
+    const observer=new ResizeObserver(resize);observer.observe(element);resize()
+    return()=>observer.disconnect()
+  },[])
   useEffect(()=>{const img=new window.Image();img.onload=()=>setSprite(img);img.src=robotPNG()},[])
   useEffect(()=>{
     engine.current=resetSimulation(points,config)
@@ -67,49 +78,57 @@ export function useSimulation(points:Waypoint[]) {
     return ()=>cancelAnimationFrame(frame)
   },[running,enabled,speed,points,config,route])
   const reset=()=>{engine.current=resetSimulation(points,config);setView(structuredClone(engine.current));setRunning(false)}
+  const plan=()=>{setThreeD(false);setRunning(false);setEnabled(false)}
+  const moveBall=(id:number,x:number,y:number)=>{
+    const ball=engine.current.balls.find(b=>b.id===id)
+    if(ball && !running){ball.x=x;ball.y=y;ball.vx=0;ball.vy=0;ball.vz=0;ball.z=pieceRadius(ball.kind);setView(structuredClone(engine.current))}
+  }
+  const play=()=>{if(view.finished)reset();setEnabled(true);setThreeD(true);setRunning(!running)}
   const robot=worldToCanvas(view)
-  const hud=<div className="simulation-ui">
+  const hud=<div className="simulation-ui" ref={dock}>
     <div className="simulation-toolbar">
-      <button aria-pressed={enabled} onClick={()=>{setEnabled(!enabled);setRunning(false)}}><Bot size={16}/> Robot preview</button>
-      {enabled && <>
-        <button disabled={points.length<2} onClick={()=>{if(view.finished)reset();setRunning(!running)}} aria-label={running?'Pause simulation':'Play simulation'}>{running?<Pause size={16}/>:<Play size={16}/>}</button>
-        <button onClick={reset} aria-label="Reset simulation"><RotateCcw size={15}/></button>
+      <div className="view-switch" aria-label="Workspace view">
+        <button aria-pressed={!threeD} onClick={plan}><Map size={16}/>Plan 2D</button>
+        <button aria-pressed={threeD} onClick={()=>{setThreeD(true);setEnabled(true)}}><Box size={16}/>Preview 3D</button>
+      </div>
+      <div className="runtime-estimate" title="Drive time plus inventory-dependent shooting delays"><span>Estimated run</span><strong>{route.min.toFixed(1)}{route.max>route.min?`–${route.max.toFixed(1)}`:''}<small> s</small></strong></div>
+      <div className="playback-controls">
+        <button className="robot-setup-button" aria-label="Robot configuration" onClick={()=>setSettings(!settings)}><Settings2 size={16}/><span>Robot setup</span></button>
         <select aria-label="Playback speed" value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option></select>
-      </>}
-      <button aria-label="Robot configuration" onClick={()=>setSettings(!settings)}><Settings2 size={16}/></button>
-      <span title="Drive profile plus a range for inventory-dependent shooting">Estimate {route.min.toFixed(1)}{route.max>route.min?`–${route.max.toFixed(1)}`:''} s</span>
+        <button className="reset-playback" onClick={reset} aria-label="Reset simulation"><RotateCcw size={15}/></button>
+        <button className="run-button" disabled={points.length<2} onClick={play} aria-label={running?'Pause simulation':'Play simulation'}>{running?<Pause size={16}/>:<Play size={16}/>}<span>{running?'Pause':view.finished?'Replay':'Run in 3D'}</span></button>
+      </div>
     </div>
     {enabled && <div className="simulation-status" aria-live="off">
-      <span>{view.time.toFixed(1)} s / 30 s</span><span>{view.finished?'Finished':running?view.action:'Paused'}</span>
-      <span>Hopper {view.inventory}/{config.capacity}</span><span>Intake {view.intake?'on':'off'}</span>
-      <span>Tips R {view.hives[0].tips} · B {view.hives[1].tips}</span>
-      <button onClick={()=>{engine.current.intake=!engine.current.intake;setView(structuredClone(engine.current))}}>Toggle intake</button>
+      <span className="time-chip">{view.time.toFixed(1)} / 30 s</span><span className="action-status">{view.finished?'Finished':running?view.action==='Drive'?'Driving':view.action:'Paused'}</span>
+      <span>Hopper <b>{view.inventory}/{config.capacity}</b></span>
+      <button aria-pressed={view.intake} onClick={()=>{engine.current.intake=!engine.current.intake;setView(structuredClone(engine.current))}}>Intake {view.intake?'on':'off'}</button>
+      <span className="tip-count red">Red tips <b>{view.hives[0].tips}</b></span><span className="tip-count blue">Blue tips <b>{view.hives[1].tips}</b></span>
       {view.warning && <strong>{view.warning}</strong>}
-      <small>Drag floor balls before play. Turret aims at the active {config.alliance} cell; shots can miss.</small>
     </div>}
     {settings && <div className="robot-settings">
-      <h3>Robot model <button onClick={()=>setSettings(false)}>Done</button></h3>
-      <p>Planning estimate, not a calibrated digital twin. Tune measured drive force and loaded speed. Geometry/config changes reset playback.</p>
+      <h3>Robot setup <button aria-label="Close robot configuration" onClick={()=>setSettings(false)}><X size={17}/></button></h3>
+      <p>Use measured drive force and loaded speed to calibrate timing. Changing these settings resets the run.</p>
       <label>Alliance<select value={config.alliance} onChange={e=>setConfig({...config,alliance:e.target.value as 'red'|'blue'})}><option value="red">Red</option><option value="blue">Blue</option></select></label>
       <label><input type="checkbox" checked={config.autoAim} onChange={e=>setConfig({...config,autoAim:e.target.checked})}/> Automatically aim launch elevation at the raised cell</label>
       <div className="robot-config-grid">{fields.map(f=><label key={f.key}>{f.label}<input type="number" min={f.min} max={f.max} step={f.step} value={config[f.key]} onChange={e=>{const n=Number(e.target.value);if(Number.isFinite(n))setConfig({...config,[f.key]:Math.max(f.min,Math.min(f.max,n))})}}/></label>)}</div>
-      <p>Free speed {route.maxSpeed.toFixed(1)} in/s · acceleration {route.acceleration.toFixed(1)} in/s². Intake latches on, transfer pauses, shoot empties the hopper. Frame overlaps warn; no rigid robot collision response or official scoring adjudication.</p>
-      <p>Hive model: 8 pollen-equivalent units tip a cell; 3 preloaded nectar count as 5. Calibration approximation; nectar spill is approximated as pollen. Ball gravity, bounce, friction, walls and floor contacts are simulated.</p>
+      <div className="model-summary"><span>Loaded speed <b>{route.maxSpeed.toFixed(1)} in/s</b></span><span>Acceleration <b>{route.acceleration.toFixed(1)} in/s²</b></span></div>
+      <p>Intake stays on; transfer pauses; shooting empties the hopper. Hive pieces retain their type and mass. A damped pivot spills them through the lower lip. Joint damping and contact restitution are approximations; frame-clearance warnings require robot validation.</p>
     </div>}
   </div>
-  const overlay=enabled && <Group>
+  const overlay=enabled && !threeD && <Group>
     {/* Hide baked-in pieces in this map layer and replace them with movable entities. */}
     <Rect x={0} y={0} width={15} height={62} fill="#292929" listening={false}/>
     <Rect x={705} y={658} width={15} height={62} fill="#292929" listening={false}/>
     {flowers.map((f,i)=>{const p=worldToCanvas(f);return <Group key={i} listening={false}><Circle x={p.x} y={p.y} radius={14} fill="#292929" stroke="#e9bb51" strokeWidth={3}/><Text x={p.x-8} y={p.y-6} text={String(view.balls.filter(b=>b.flower===i).length)} fill="white" fontSize={12}/></Group>})}
     {view.hives.map((h,i)=>{const p=worldToCanvas(hiveCenters[i]);return <Group key={i} x={p.x} y={p.y} listening={false}>
       <Rect x={-118} y={-59} width={236} height={118} fill="#27323a" stroke={i===0?'#f36b76':'#6f95ff'} strokeWidth={3}/>
-      <Line points={[-64,-h.angle,64,h.angle]} stroke="#b5cad0" strokeWidth={6}/>
-      {[0,1].map(side=><Group key={side} x={side===0?-65:65} y={side===0?-h.angle:h.angle}><Rect x={-35} y={-30} width={70} height={60} fill={side===h.side?'#52616c':'#17262e'} stroke={i===0?'#f36b76':'#6f95ff'} strokeWidth={3}/><Text x={-28} y={-10} text={`${side===h.side?'UP':'DOWN'}\n${h.cells[side].toFixed(0)} / 8`} fill="white" fontSize={10}/></Group>)}
+      <Line points={[-75,0,75,0]} stroke="#b5cad0" strokeWidth={6}/>
+      {[0,1].map(side=><Group key={side} x={cellOpening(h,side).x*5}><Rect x={-30} y={-50} width={60} height={100} fill={side===h.side?'#52616c':'#17262e'} stroke={i===0?'#f36b76':'#6f95ff'} strokeWidth={3}/><Text x={-26} y={-10} text={`${side===h.side?'UP':'DOWN'}\n${h.contents[side].length} pieces`} fill="white" fontSize={10}/></Group>)}
     </Group>})}
     {view.balls.filter(b=>b.flower===undefined).map(b=>{const p=worldToCanvas(b);return <Group key={b.id}>
       <Circle x={p.x} y={p.y} radius={7} fill="black" opacity={.25} listening={false}/>
-      <Circle x={p.x} y={p.y-b.z*.65} radius={7+b.z*.025} fill={b.kind==='pollen'?'#ffcf3e':'#f36b76'} stroke="#796019" strokeWidth={1} draggable={!running && b.z===0} onMouseDown={e=>{e.cancelBubble=true}} onTouchStart={e=>{e.cancelBubble=true}} onDragEnd={e=>{e.cancelBubble=true;const target=engine.current.balls.find(ball=>ball.id===b.id);if(target){target.x=Math.max(1.4,Math.min(142.6,e.target.x()/5));target.y=Math.max(1.4,Math.min(142.6,144-e.target.y()/5));target.vx=0;target.vy=0;setView(structuredClone(engine.current))}}}/>
+      <Circle x={p.x} y={p.y-b.z*.65} radius={pieceRadius(b.kind)*5} fill={b.kind==='pollen'?'#ffcf3e':b.color==='blue'?'#6f95ff':'#f36b76'} stroke="#796019" strokeWidth={1} draggable={!running && b.z<=pieceRadius(b.kind)+.05} onMouseDown={e=>{e.cancelBubble=true}} onTouchStart={e=>{e.cancelBubble=true}} onDragEnd={e=>{e.cancelBubble=true;moveBall(b.id,Math.max(1.8,Math.min(142.2,e.target.x()/5)),Math.max(1.8,Math.min(142.2,144-e.target.y()/5)))}}/>
     </Group>})}
     <Circle x={robot.x} y={robot.y} radius={5} fill="#6ee7f2" stroke="white" strokeWidth={2} listening={false}/>
     <Group x={robot.x} y={robot.y} rotation={90-view.heading} listening={false}>
@@ -117,5 +136,6 @@ export function useSimulation(points:Waypoint[]) {
       {view.intake && <Rect x={-config.size*2} y={-config.size*2.8} width={config.size*4} height={5} fill="#70efbd"/>}
     </Group>
   </Group>
-  return {hud,overlay}
+  const scene=threeD && <ThreePreview view={view} config={config} route={route} running={running} onBallMove={moveBall} onBack={plan}/>
+  return {hud,overlay,scene,threeD}
 }

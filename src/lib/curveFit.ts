@@ -6,6 +6,28 @@ export function cubic(a: Point2D, b: Point2D, c: Point2D, d: Point2D, t: number)
   return { x: u*u*u*a.x + 3*u*u*t*b.x + 3*u*t*t*c.x + t*t*t*d.x,
     y: u*u*u*a.y + 3*u*u*t*b.y + 3*u*t*t*c.y + t*t*t*d.y }
 }
+
+// Pedro 3 linear/piecewise interpolation uses travelled arc length, not raw
+// Bézier parameter. This table keeps the planner's heading/timing estimate aligned.
+export function curveArc(a: Point2D, b: Point2D, c: Point2D, d: Point2D) {
+  const count=240,lengths=[0]
+  let previous=a
+  for(let i=1;i<=count;i++){
+    const point=cubic(a,b,c,d,i/count);lengths.push(lengths[i-1]+distance(previous,point));previous=point
+  }
+  const total=lengths[count]||1
+  const completionAt=(t:number)=>{
+    const at=Math.max(0,Math.min(count,t*count)),index=Math.min(count-1,Math.floor(at))
+    return (lengths[index]+(lengths[index+1]-lengths[index])*(at-index))/total
+  }
+  const parameterAt=(completion:number)=>{
+    const target=Math.max(0,Math.min(1,completion))*total
+    let low=0,high=count
+    while(high-low>1){const mid=Math.floor((high+low)/2);if(lengths[mid]<target)low=mid;else high=mid}
+    return (low+(target-lengths[low])/Math.max(1e-12,lengths[high]-lengths[low]))/count
+  }
+  return {completionAt,parameterAt}
+}
 const unit = (a: Point2D, b: Point2D) => {
   const length = distance(a, b) || 1
   return { x: (b.x-a.x)/length, y: (b.y-a.y)/length }

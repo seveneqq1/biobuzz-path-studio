@@ -42,6 +42,24 @@ export function controls(points: Waypoint[], index: number) {
   }
 }
 
+// Move adjacent fitted handles with their anchor; unrelated optimized curves
+// must not revert to Catmull-Rom just because one waypoint was inspected/edited.
+export function editWaypoint(points: Waypoint[], id: string, changes: Partial<Waypoint>) {
+  const old=points.find(p=>p.id===id)
+  if(!old)return points
+  const next={...old,...changes},dx=next.x-old.x,dy=next.y-old.y
+  const ratio=next.controlWeight/old.controlWeight
+  return points.map(point=>{
+    const updated=point.id===id?next:point
+    if(!point.curve || point.curve.endId!==id && point.id!==id)return updated
+    const move=(handle:Point2D)=>({x:next.x+(handle.x-old.x)*ratio,y:next.y+(handle.y-old.y)*ratio})
+    return {...updated,curve:{...point.curve,
+      c1:point.id===id && (dx||dy||ratio!==1)?move(point.curve.c1):point.curve.c1,
+      c2:point.curve.endId===id && (dx||dy||ratio!==1)?move(point.curve.c2):point.curve.c2,
+    }}
+  })
+}
+
 function pointLineDistance(p: Point2D, a: Point2D, b: Point2D) {
   const length2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2
   if (!length2) return distance(p, a)
