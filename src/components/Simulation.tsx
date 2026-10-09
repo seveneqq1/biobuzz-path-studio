@@ -86,18 +86,19 @@ export function useSimulation(points:Waypoint[],config:RobotConfig,setConfig:(co
   }
   const play=()=>{if(view.finished)reset();setEnabled(true);setThreeD(true);setRunning(!running)}
   const robot=worldToCanvas(view)
+  const clearance=route.wallCollision?{sample:route.wallCollision,name:'Field wall'}:route.supportCollision
   const hud=<div className="simulation-ui" ref={dock}>
     <div className="simulation-toolbar">
       <div className="view-switch" aria-label="Workspace view">
         <button aria-pressed={!threeD} onClick={plan}><Map size={16}/>Plan 2D</button>
         <button aria-pressed={threeD} onClick={()=>{setThreeD(true);setEnabled(true)}}><Box size={16}/>Preview 3D</button>
       </div>
-      <div className="runtime-estimate" title="Drive time plus inventory-dependent shooting delays"><span>{route.wallCollision?'Wall clearance':'Estimated run'}</span><strong>{route.wallCollision?'Unsafe route':<>{route.min.toFixed(1)}{route.max>route.min?`–${route.max.toFixed(1)}`:''}<small> s</small></>}</strong></div>
+      <div className="runtime-estimate" title="Drive time plus inventory-dependent shooting delays"><span>{clearance?'Obstacle clearance':'Estimated run'}</span><strong>{clearance?'Unsafe route':<>{route.min.toFixed(1)}{route.max>route.min?`–${route.max.toFixed(1)}`:''}<small> s</small></>}</strong></div>
       <div className="playback-controls">
         <button className="robot-setup-button" aria-label="Robot configuration" onClick={()=>setSettings(!settings)}><Settings2 size={16}/><span>Robot setup</span></button>
         <select aria-label="Playback speed" value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option></select>
         <button className="reset-playback" onClick={reset} aria-label="Reset simulation"><RotateCcw size={15}/></button>
-        <button className="run-button" disabled={points.length<2||view.blocked} onClick={play} aria-label={running?'Pause simulation':'Play simulation'}>{running?<Pause size={16}/>:<Play size={16}/>}<span>{view.blocked?'Wall contact':running?'Pause':view.finished?'Replay':'Run in 3D'}</span></button>
+        <button className="run-button" disabled={points.length<2||view.blocked} onClick={play} aria-label={running?'Pause simulation':'Play simulation'}>{running?<Pause size={16}/>:<Play size={16}/>}<span>{view.blocked?'Collision stop':running?'Pause':view.finished?'Replay':'Run in 3D'}</span></button>
       </div>
     </div>
     {enabled && <div className="simulation-status" aria-live="off">
@@ -108,7 +109,7 @@ export function useSimulation(points:Waypoint[],config:RobotConfig,setConfig:(co
       <span className="tip-count red">Red tips <b>{view.hives[0].tips}</b></span><span className="tip-count blue">Blue tips <b>{view.hives[1].tips}</b></span>
       {view.warning && <strong>{view.warning}</strong>}
     </div>}
-    {route.wallCollision && !view.blocked && <div className="route-safety" role="status">Wall clearance needed near ({route.wallCollision.x.toFixed(1)}, {route.wallCollision.y.toFixed(1)}). Your rotated {config.size}-inch robot will stop at contact.</div>}
+    {clearance && !view.blocked && <div className="route-safety" role="status">{clearance.name} clearance needed near ({clearance.sample.x.toFixed(1)}, {clearance.sample.y.toFixed(1)}). Your rotated {config.size}-inch robot will stop at contact.</div>}
     {settings && <div className="robot-settings">
       <h3>Robot setup <button aria-label="Close robot configuration" onClick={()=>setSettings(false)}><X size={17}/></button></h3>
       <p>Use measured drive force and loaded speed to calibrate timing. Changing these settings resets the run.</p>
@@ -117,7 +118,7 @@ export function useSimulation(points:Waypoint[],config:RobotConfig,setConfig:(co
       <label><input type="checkbox" checked={config.autoAim} onChange={e=>setConfig({...config,autoAim:e.target.checked})}/> Automatically aim launch elevation at the raised cell</label>
       <div className="robot-config-grid">{fields.map(f=><label key={f.key}>{f.label}<input type="number" min={f.min} max={f.max} step={f.step} value={config[f.key]} onChange={e=>{const n=Number(e.target.value);if(Number.isFinite(n))setConfig({...config,[f.key]:Math.max(f.min,Math.min(f.max,n))})}}/></label>)}</div>
       <div className="model-summary"><span>Loaded speed <b>{route.maxSpeed.toFixed(1)} in/s</b></span><span>Acceleration <b>{route.acceleration.toFixed(1)} in/s²</b></span></div>
-      <p>Front wheel intake feeds a timed, single-file indexer. Transfer waits for queued pieces. The independent turret tracks the raised cell and gates shots on alignment without turning the chassis. Wall contact stops the route. This template has approximate contact/joint physics; validate frame clearance and mechanism timings on your robot.</p>
+      <p>Front wheel intake feeds a timed indexer. The independent turret gates shots on alignment. Walls and hive supports stop the route; balls rebound from support tubes, feet and panels. Support checks use a conservative box up to the template’s maximum turret height. This is approximate physics; validate clearances and timings on your robot.</p>
     </div>}
   </div>
   const overlay=enabled && !threeD && <Group>
@@ -141,5 +142,5 @@ export function useSimulation(points:Waypoint[],config:RobotConfig,setConfig:(co
     </Group>
   </Group>
   const scene=threeD && <ThreePreview view={view} config={config} route={route} running={running} onBallMove={moveBall} onBack={plan} theme={theme}/>
-  return {hud,overlay,scene,threeD}
+  return {hud,overlay,scene,threeD,route}
 }

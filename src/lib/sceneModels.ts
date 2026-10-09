@@ -1,6 +1,7 @@
 import * as T from 'three'
 import { HIVE, pieceRadius } from './hivePhysics'
 import type { PieceKind } from './hivePhysics'
+import { frameSolids } from './fieldGeometry'
 
 export const materials = () => ({
   steel: new T.MeshStandardMaterial({color:0xa9b7be,metalness:.75,roughness:.32}),
@@ -83,17 +84,17 @@ export function buildField(scene:T.Scene,m:Mats,dark=false) {
 }
 
 export function buildHiveFrame(parent:T.Object3D,m:Mats) {
-  const half=HIVE.frameWidth/2,depth=HIVE.frameDepth/2
+  const depth=HIVE.frameDepth/2
+  const point=(p:{x:number;y:number;z:number})=>[p.x-72,p.z,72-p.y]
+  for(const solid of frameSolids){
+    if(solid.kind==='tube')rod(parent,point(solid.a),point(solid.b),solid.radius,solid.name.includes('axle')?m.dark:m.steel)
+    else if(solid.material==='foot')box(parent,[solid.half.x*2,solid.half.z*2,solid.half.y*2],point(solid.center),m.dark)
+  }
   for(const z of [-depth,depth]){
-    rod(parent,[-half,.5,z],[0,HIVE.pivot,z],.62,m.steel)
-    rod(parent,[half,.5,z],[0,HIVE.pivot,z],.62,m.steel)
-    rod(parent,[-half,.65,z],[half,.65,z],.58,m.steel)
-    for(const x of [-half,half])box(parent,[5,.25,4],[x,.15,z],m.dark)
     const panel=new T.Shape();panel.moveTo(-9,18);panel.lineTo(9,18);panel.lineTo(5,28);panel.lineTo(-5,28);panel.closePath()
     const skin=new T.Mesh(new T.ShapeGeometry(panel),m.amber);skin.position.z=z;skin.material.side=T.DoubleSide;parent.add(skin)
     const title=label('BIOBUZZ','#243139','#f6b94c',15,3);title.position.set(0,23,z);parent.add(title)
   }
-  rod(parent,[0,HIVE.pivot,-depth],[0,HIVE.pivot,depth],.8,m.dark)
   // Under-tile straps and visible joint collars.
   for(const z of [-12.75,12.75])rod(parent,[0,HIVE.pivot,z-1.4],[0,HIVE.pivot,z+1.4],1.1,m.steel)
 }

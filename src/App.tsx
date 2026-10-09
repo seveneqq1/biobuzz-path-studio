@@ -54,7 +54,8 @@ export default function App() {
   const optimizePath = () => {
     const before = points.length
     const next = optimizeCurves(points,tolerance)
-    if(!profile(points,config).wallCollision && profile(next,config).wallCollision){setPathOptimizationLabel('Fit rejected: wall clearance');return}
+    const original=profile(points,config),fitted=profile(next,config)
+    if((!original.wallCollision&&fitted.wallCollision)||(!original.supportCollision&&fitted.supportCollision)){setPathOptimizationLabel('Fit rejected: obstacle clearance');return}
     updatePoints(next)
     setPathOptimizationLabel(next.length < before ? `${before} → ${next.length} points` : 'No reduction')
     window.setTimeout(() => setPathOptimizationLabel('Optimize path'), 2000)

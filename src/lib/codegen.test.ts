@@ -90,3 +90,8 @@ test('robot setup alliance, manual pitch and intake template propagate to Java',
   assert.match(code,/silicone wheel stacks/);assert.match(code,/hiveTargetY\(\) \{ return 84\.75/)
   assert.match(code,/double elevation = Math\.toRadians\(62\)/);assert.doesNotMatch(code,/double discriminant/)
 })
+test('hive support intersections export a separate fail-fast clearance guard',()=>{
+  const code=exportCode([node(25,52.525),node(60,52.525)])
+  assert.match(code,/routeClearsSupports = false/);assert.match(code,/if \(!routeClearsSupports\) throw/)
+  assert.match(code,/hive pillar/)
+})

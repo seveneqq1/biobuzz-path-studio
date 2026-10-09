@@ -24,7 +24,7 @@ export function generateJava(points: Waypoint[], decisions: SegmentDecision[],co
   const paths = route.flatMap(step => step.kind === 'path' ? [step] : step.kind === 'group' ? [step.path] : [])
   const actions = points.flatMap(point => point.action ? [point.action] : [])
   const used = new Set(actions.map(action => action.type))
-  const collision=profile(points,config).wallCollision
+  const safety=profile(points,config),collision=safety.wallCollision,support=safety.supportCollision
   const opening=cellOpening(createHive(config.alliance==='red'?1:0,config.alliance),config.alliance==='red'?1:0)
   const fields = points.map((point, index) => `    private final Pose ${poseName(index)} = p.of(${n(point.x)}, ${n(point.y)}, ${n(point.heading)});`).join('\n')
   const pathMethods = paths.map(item => {
@@ -155,11 +155,13 @@ ${fields}
     private final Object feedResource = new Object();
     private final Object turretResource = new Object();
     private final boolean routeClearsWalls = ${!collision}; // ${config.size}-inch rotated square footprint
+    private final boolean routeClearsSupports = ${!support}; // conservative template height; recheck against your CAD
 
     @Override
     public void init() {
         Scheduler.reset();
         if (!routeClearsWalls) throw new IllegalArgumentException("${collision?`Route intersects a wall near (${n(collision.x)}, ${n(collision.y)}). Edit the route before running.`:'Recheck wall clearance after changing the robot footprint.'}");
+        if (!routeClearsSupports) throw new IllegalArgumentException("${support?`Route intersects ${support.name} near (${n(support.sample.x)}, ${n(support.sample.y)}). Edit the route before running.`:'Recheck hive support clearance against your robot geometry.'}");
         follower = Constants.create(hardwareMap);
         follower.setPose(startPose);
         // TODO: initialize your hardware/subsystems here.

@@ -6,6 +6,7 @@ import type { RobotConfig, SimState, profile } from '../lib/simulation'
 import { flowers, hiveCenters } from '../lib/simulation'
 import { HIVE, pieceRadius } from '../lib/hivePhysics'
 import { buildField, buildFlower, buildHive, buildHiveFrame, buildRobot, gamePieceFactory, label, materials } from '../lib/sceneModels'
+import { followCameraFrame, shootingCameraActive, smoothCameraBlend } from '../lib/followCamera'
 
 interface Props {
   view:SimState; config:RobotConfig; route:ReturnType<typeof profile>; running:boolean;
@@ -30,8 +31,8 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack,the
     renderer.outputColorSpace=T.SRGBColorSpace;renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=1.15
     element.appendChild(renderer.domElement)
     const background=theme==='dark'?0x24343f:0xdfe7ea
-    const scene=new T.Scene();scene.background=new T.Color(background);scene.fog=new T.Fog(background,390,850)
-    const camera=new T.PerspectiveCamera(39,1,.5,1000);camera.position.set(155,142,176)
+    const scene=new T.Scene();scene.background=new T.Color(background);scene.fog=new T.Fog(background,500,1800)
+    const camera=new T.PerspectiveCamera(39,1,.5,2400);camera.position.set(155,142,176)
     const controls=new OrbitControls(camera,renderer.domElement)
     controls.target.set(0,15,0);controls.enableDamping=true;controls.dampingFactor=.08;controls.minDistance=65;controls.maxDistance=420
     controls.maxPolarAngle=Math.PI*.48;controls.minPolarAngle=.12;controls.update()
@@ -59,8 +60,11 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack,the
       const start=new T.Mesh(new T.TorusGeometry(2.8,.22,8,32),m.amber);start.rotation.x=Math.PI/2;start.position.copy(pathPoints[0]);scene.add(start)
       const finish=label('Finish','#33464f','#f9df9c',12,3);finish.position.copy(pathPoints.at(-1)!).y=4;scene.add(finish)
     }
+    if(route.supportCollision){const point=route.supportCollision.sample,marker=new T.Mesh(new T.TorusGeometry(2.3,.35,8,24),m.red)
+      marker.rotation.x=Math.PI/2;marker.position.set(point.x-72,.6,72-point.y);scene.add(marker)}
     const ballMeshes=new Map<number,T.Group>()
     let previousMode:CameraMode='orbit',dragging:number|null=null
+    let shotBlend=0,lastFrame=performance.now()
     const ray=new T.Raycaster(),pointer=new T.Vector2(),floor=new T.Plane(new T.Vector3(0,1,0),-1.4)
     const pick=(event:PointerEvent)=>{
       const rect=renderer.domElement.getBoundingClientRect()
@@ -90,6 +94,7 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack,the
     const contextLost=(event:Event)=>{event.preventDefault();setError('The 3D graphics context was interrupted. Return to 2D and reopen 3D to retry.')}
     renderer.domElement.addEventListener('webglcontextlost',contextLost)
     renderer.setAnimationLoop(()=>{
+      const now=performance.now(),dt=Math.min(.1,(now-lastFrame)/1000);lastFrame=now
       const state=live.current.view,active=new Set(state.balls.map(b=>b.id))
       for(const [id,mesh] of ballMeshes)if(!active.has(id)){scene.remove(mesh);ballMeshes.delete(id)}
       for(const ball of state.balls){
@@ -127,13 +132,17 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack,the
         pieces.slice(0,8).forEach((piece,i)=>{const ball=createPiece(piece.kind,piece.color);ball.position.set(-4+(i%3)*2.8,8+Math.floor(i/3)*2.8,-3+(i%2)*3);hopper.add(ball)})}
       const currentMode=cameraMode.current
       if(currentMode!==previousMode){
+        shotBlend=0;controls.maxDistance=420
         controls.enabled=currentMode==='orbit';previousMode=currentMode
         if(currentMode==='orbit'){camera.position.set(155,142,176);controls.target.set(0,15,0)}
         if(currentMode==='hive'){camera.position.set(92,88,110);controls.target.set(0,42,0)}
       }
       if(currentMode==='follow'){
-        const h=state.heading*Math.PI/180,position=new T.Vector3(state.x-72-Math.cos(h)*54,38,72-state.y+Math.sin(h)*54)
-        camera.position.lerp(position,.06);controls.target.lerp(new T.Vector3(state.x-72,9,72-state.y),.1)
+        const nextShot=!state.finished&&!state.blocked&&route.shotStops.some(stop=>!state.processed.includes(stop.node)&&stop.time>=state.driveTime&&stop.time-state.driveTime<.7)
+        shotBlend=smoothCameraBlend(shotBlend,shootingCameraActive(state)||nextShot,dt)
+        const frame=followCameraFrame(state,config,camera.aspect,shotBlend),position=new T.Vector3(frame.position.x,frame.position.y,frame.position.z)
+        controls.maxDistance=Math.max(420,frame.distance+50)
+        camera.position.lerp(position,1-Math.exp(-7*dt));controls.target.lerp(new T.Vector3(frame.target.x,frame.target.y,frame.target.z),1-Math.exp(-9*dt))
       }
       controls.update();renderer.render(scene,camera)
     })
@@ -154,7 +163,7 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack,the
       <button aria-pressed={mode==='follow'} onClick={()=>setMode('follow')}><Video size={15}/>Follow robot</button>
       <button aria-pressed={mode==='hive'} onClick={()=>setMode('hive')}><Focus size={15}/>Hives</button>
     </div>
-    <div className="scene-instructions">{mode==='orbit'?'Drag to orbit · scroll to zoom · drag floor balls while paused':mode==='follow'?'Robot-mounted chase view':'Hive joint and cell view'}</div>
+    <div className="scene-instructions">{mode==='orbit'?'Drag to orbit · scroll to zoom · drag floor balls while paused':mode==='follow'?shootingCameraActive(view)?'Shot view: robot, airborne balls and hive':'Robot follow · automatically widens for shooting':'Hive joint and cell view'}</div>
     {error && <div className="scene-error"><p>{error}</p><button onClick={onBack}>Return to 2D</button></div>}
   </div>
 }

@@ -1,11 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { optimizeCurves, cubic, curveArc } from './curveFit'
-import { controls, distance, editWaypoint } from './geometry'
+import { controls, distance, editWaypoint, seedWaypoints } from './geometry'
 import { defaultConfig, profile, resetSimulation, stepSimulation } from './simulation'
 import type { Waypoint } from '../types'
 import { addCellPiece, advanceHive, cellOpening, createHive, HIVE, pieceMass } from './hivePhysics'
 import { clearsWalls, sweepWalls, wallExtent } from './walls'
+import { bounceOffSupports, robotSupportCollision, segmentBoxDistance, sweepSupports } from './supportCollisions'
+import { frameSolids, templateClearanceHeight } from './fieldGeometry'
+import { airborneShots, followCameraFrame, shootingCameraActive, smoothCameraBlend } from './followCamera'
 
 const node=(x:number,y:number):Waypoint=>({x,y,id:crypto.randomUUID(),heading:0,interpolation:'auto',controlWeight:1})
 const sample=(points:Waypoint[])=>points.slice(0,-1).flatMap((p,i)=>{const {c1,c2}=controls(points,i);return Array.from({length:201},(_,j)=>cubic(p,c1,c2,points[i+1],j/200))})
@@ -88,8 +91,11 @@ test('tipping conserves real piece types and spills through one downward lip',()
   assert.equal(hive.tips,1);assert.equal(hive.angle,-HIVE.stopAngle)
   assert.equal(spills.length,7);assert.equal(spills.filter(p=>p.kind==='nectar').length,3)
   assert.equal(spills.filter(p=>p.kind==='pollen').length,4)
-  assert.ok(spills.every(p=>p.x>15 && p.vx>0 && p.vz<0 && p.vy===0))
-  assert.ok(Math.max(...spills.map(p=>p.y))-Math.min(...spills.map(p=>p.y))<=12)
+  assert.ok(spills.every(p=>p.x>15 && p.vx>0 && p.vz<0))
+  assert.ok(spills.some(p=>p.vy>2) && spills.some(p=>p.vy< -2),'packing creates a lateral fan in both directions')
+  assert.ok(spills.every(p=>Math.abs(p.vy)<Math.abs(p.vx)),'spill must travel out of the lip, not sideways/radially')
+  assert.ok(Math.max(...spills.map(p=>p.y))-Math.min(...spills.map(p=>p.y))<=HIVE.openingWidth-2*1.4)
+  assert.ok(spills.some(p=>Math.hypot(p.vx,p.vy,p.vz)>40),'more energetic gravitational spill')
   const mass=spills.reduce((sum,p)=>sum+pieceMass(p.kind),0)
   assert.ok(Math.abs(mass-(3*.091+4*.055))<1e-9)
   assert.ok(hive.cells[1]<1e-8);assert.equal(hive.contents[1].length,0)
@@ -103,6 +109,20 @@ test('shooting scores, tips the hive, and finishes before the next path starts',
   for(let i=0;i<1200 && !s.finished;i++)stepSimulation(s,points,defaultConfig,route,1/120)
   assert.equal(s.inventory,0);assert.ok(s.hives[0].tips>=1)
   assert.ok(s.finished);assert.equal(s.x,115)
+})
+
+test('elapsed time retains action delays through drive samples and support contact',()=>{
+  for(const points of [[node(20,20),node(100,20)],[node(25,52.525),node(100,52.525)]]) {
+    points[0].action={type:'wait',durationMs:700}
+    const s=resetSimulation(points,defaultConfig),route=profile(points,defaultConfig)
+    let ticks=0
+    while(!s.finished&&!s.blocked&&ticks<1200){
+      stepSimulation(s,points,defaultConfig,route,1/120);ticks++
+      assert.ok(Math.abs(s.time-ticks/120)<1e-9,'route time must not replace elapsed time')
+    }
+    assert.ok(s.finished||s.blocked)
+    assert.ok(s.time>s.driveTime+.65)
+  }
 })
 
 test('parallel commands overlap motion but join before the next action',()=>{
@@ -198,4 +218,75 @@ test('precise S-shaped fitting retains both lobes and commands without increasin
   const reduced=optimizeCurves(points,.1),a=sample(points),b=sample(reduced)
   assert.ok(reduced.length<12);assert.ok(reduced.length<points.length)
   for(const [source,target] of [[a,b],[b,a]])assert.ok(Math.max(...source.map(p=>Math.min(...target.map(q=>distance(p,q)))))<.35)
+})
+
+test('segment-to-box distance accounts for diagonal 3D supports and open overhead space',()=>{
+  assert.equal(segmentBoxDistance({x:-3,y:0,z:0},{x:3,y:0,z:0},{x:1,y:1,z:1}),0)
+  assert.ok(Math.abs(segmentBoxDistance({x:-3,y:4,z:0},{x:3,y:4,z:0},{x:1,y:1,z:1})-3)<1e-9)
+  assert.equal(robotSupportCollision({x:72,y:72,heading:0},16),undefined,'middle of the frame remains traversable under the axle')
+  assert.ok(robotSupportCollision({x:72,y:72,heading:0},16,46),'a taller robot hits the overhead axle')
+})
+test('hive pillar collision sweeps stop before contact and block commands beyond the support',()=>{
+  const points=[node(25,52.525),node(60,52.525)];points[1].action={type:'shoot'}
+  const config=defaultConfig,s=resetSimulation(points,config),route=profile(points,config)
+  assert.ok(route.supportCollision);assert.match(route.supportCollision.name,/hive pillar/)
+  for(let i=0;i<800;i++){stepSimulation(s,points,config,route,1/120);assert.equal(robotSupportCollision(s,config.size),undefined)}
+  assert.ok(s.blocked);assert.equal(s.finished,false);assert.equal(s.inventory,4);assert.ok(!s.processed.includes(1))
+  assert.match(s.warning,/hive pillar/);assert.ok(s.x<40)
+})
+test('large translation and pure rotation cannot tunnel through a support foot',()=>{
+  const swept=sweepSupports({x:25,y:52.525,heading:0},{x:120,y:52.525,heading:0},16)
+  assert.ok(swept.solid);assert.ok(swept.fraction<.3);assert.equal(robotSupportCollision(swept.pose,16),undefined)
+  const from={x:35,y:52.525,heading:0},to={...from,heading:90}
+  assert.equal(robotSupportCollision(from,16),undefined);assert.equal(robotSupportCollision(to,16),undefined)
+  assert.ok(sweepSupports(from,to,16).solid,'angled corners swing into the foot between safe endpoints')
+})
+test('support-overlapping starts are blocked and displayed at a non-penetrating pose',()=>{
+  const points=[node(47.27,52.525),node(25,20)],s=resetSimulation(points,defaultConfig)
+  assert.ok(s.blocked);assert.match(s.warning,/Start overlaps/)
+  assert.equal(robotSupportCollision(s,16),undefined);assert.ok(clearsWalls(s,16))
+})
+test('fast airborne balls bounce off diagonal support capsules without tunnelling',()=>{
+  const pillar=frameSolids.find(s=>s.kind==='tube'&&s.name==='South-east hive pillar')!
+  assert.equal(pillar.kind,'tube');if(pillar.kind!=='tube')return
+  const t=.45,center={x:pillar.a.x+(pillar.b.x-pillar.a.x)*t,y:pillar.a.y,z:pillar.a.z+(pillar.b.z-pillar.a.z)*t}
+  const previous={...center,y:center.y-6},ball={...center,y:center.y+6,vx:0,vy:300,vz:0}
+  const hit=bounceOffSupports(ball,previous,1.4)
+  assert.equal(hit?.name,pillar.name);assert.ok(ball.y<center.y);assert.ok(ball.vy<0)
+  assert.ok(Math.hypot(ball.vx,ball.vy,ball.vz)<=300,'support contacts do not add kinetic energy')
+})
+test('energetic spills are deterministic and retain every original piece',()=>{
+  const run=()=>{const h=createHive(1,'red');for(let i=0;i<4;i++)addCellPiece(h,1,{kind:'pollen'});const spills=[];for(let i=0;i<600;i++)spills.push(...advanceHive(h,1/120));return spills}
+  assert.deepEqual(run(),run());assert.equal(run().length,7)
+})
+test('follow camera fits the robot, hive, airborne shot and predicted apex in portrait and landscape',()=>{
+  const state=resetSimulation([node(85,20),node(115,20)],defaultConfig)
+  state.shooting=true;state.turretElevation=78
+  state.balls.push({id:100,shot:true,x:87,y:32,z:90,vx:10,vy:25,vz:80,kind:'pollen'})
+  assert.equal(airborneShots(state).length,1);assert.ok(shootingCameraActive(state))
+  for(const aspect of [.45,1,2.2]){
+    const frame=followCameraFrame(state,defaultConfig,aspect,1),p=frame.position,t=frame.target
+    const dz={x:t.x-p.x,y:t.y-p.y,z:t.z-p.z},length=Math.hypot(dz.x,dz.y,dz.z),f={x:dz.x/length,y:dz.y/length,z:dz.z/length}
+    const rLength=Math.hypot(f.x,f.z),right={x:-f.z/rLength,y:0,z:f.x/rLength}
+    const up={x:right.y*f.z-right.z*f.y,y:right.z*f.x-right.x*f.z,z:right.x*f.y-right.y*f.x}
+    for(const point of frame.subjects){const v={x:point.x-p.x,y:point.y-p.y,z:point.z-p.z},dot=(a:typeof v)=>a.x*v.x+a.y*v.y+a.z*v.z,depth=dot(f)
+      assert.ok(depth>0);assert.ok(Math.abs(dot(up))<depth*Math.tan(39*Math.PI/360));assert.ok(Math.abs(dot(right))<depth*Math.tan(39*Math.PI/360)*aspect)}
+    const close=followCameraFrame(state,defaultConfig,aspect,0)
+    assert.ok(length>Math.hypot(close.position.x-close.target.x,close.position.y-close.target.y,close.position.z-close.target.z))
+  }
+  state.shooting=false;state.balls=state.balls.filter(b=>b.id!==100);assert.equal(shootingCameraActive(state),false)
+})
+test('shot camera smoothly widens and returns with frame-rate independent damping',()=>{
+  let a=0,b=0
+  for(let i=0;i<30;i++)a=smoothCameraBlend(a,true,1/30)
+  for(let i=0;i<60;i++)b=smoothCameraBlend(b,true,1/60)
+  assert.ok(a>.99);assert.ok(Math.abs(a-b)<1e-10)
+  let previous=a
+  for(let i=0;i<120;i++){a=smoothCameraBlend(a,false,1/60);assert.ok(a<previous&&a>=0);previous=a}
+  assert.ok(a<.001)
+})
+test('the demo route clears the shared wall/support geometry',()=>{
+  const route=profile(seedWaypoints(),defaultConfig)
+  assert.equal(route.wallCollision,undefined);assert.equal(route.supportCollision,undefined)
+  assert.ok(templateClearanceHeight(16)>24)
 })

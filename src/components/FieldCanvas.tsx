@@ -8,6 +8,7 @@ import type { ActionType, CanvasTool, PathAction, Point2D, SegmentDecision, Wayp
 import { canvasToWorld, clamp, controls, editWaypoint, FIELD_PIXELS, normalizeDegrees, simplify, tangentDegrees, worldToCanvas } from '../lib/geometry'
 import type { RobotConfig } from '../lib/simulation'
 import { clearsWalls } from '../lib/walls'
+import { robotSupportCollision } from '../lib/supportCollisions'
 
 interface Props {
   points: Waypoint[]
@@ -45,6 +46,7 @@ interface PendingAction { point: Point2D; sampleIndex: number; action: PathActio
 export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,onConfigChange,theme,onToolChange, onSnapChange, onPointsChange, onSelect }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const simulation=useSimulation(points,config,onConfigChange,theme)
+  const supportMarker=simulation.route.supportCollision?worldToCanvas(simulation.route.supportCollision.sample):null
   const stageRef = useRef<Konva.Stage>(null)
   const [size, setSize] = useState({ width: 760, height: 720 })
   const [scale, setScale] = useState(0.86)
@@ -280,6 +282,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,
             <Text x={(p0.x + p3.x) / 2 - 13} y={(p0.y + p3.y) / 2 - 12} text={`${index + 1}`} width={26} height={24} align="center" verticalAlign="middle" fill="#08161f" fontSize={13} fontStyle="bold" listening={false} />
           </Group>
         })}
+        {supportMarker && <Group x={supportMarker.x} y={supportMarker.y} listening={false}><Circle radius={14} fill="#253039" stroke="#ff9380" strokeWidth={3}/><Line points={[-5,-5,5,5,0,0,-5,5,5,-5]} stroke="#ff9380" strokeWidth={2}/><Text text="Support clearance" x={18} y={-7} fill="#ffc1a4" fontSize={12}/></Group>}
         {stroke.length > 1 && <Line points={stroke.flatMap(point => [point.x, point.y])} stroke="#f2c94c" strokeWidth={5} lineCap="round" lineJoin="round" dash={[10, 6]} listening={false} />}
         {pendingActions.map((marker, index) => {
           const meta = actionMeta[marker.action.type]
@@ -293,9 +296,10 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,
           const radians = -point.heading * Math.PI / 180
           const arrowEnd = { x: canvas.x + Math.cos(radians) * 42, y: canvas.y + Math.sin(radians) * 42 }
           const selected = point.id === selectedId
+          const safe=clearsWalls(point,config.size)&&!robotSupportCollision(point,config.size)
           const action = point.action ? actionMeta[point.action.type] : null
           return <Group key={point.id}>
-            {selected && <Rect x={canvas.x} y={canvas.y} offsetX={config.size*2.5} offsetY={config.size*2.5} width={config.size*5} height={config.size*5} rotation={-point.heading} fill={clearsWalls(point,config.size)?'#6ee7f215':'#ff6f7728'} stroke={clearsWalls(point,config.size)?'#6ee7f2':'#ff6f77'} strokeWidth={1.5} dash={[6,4]} listening={false}/>}
+            {selected && <Rect x={canvas.x} y={canvas.y} offsetX={config.size*2.5} offsetY={config.size*2.5} width={config.size*5} height={config.size*5} rotation={-point.heading} fill={safe?'#6ee7f215':'#ff6f7728'} stroke={safe?'#6ee7f2':'#ff6f77'} strokeWidth={1.5} dash={[6,4]} listening={false}/>}
             {selected && <Line points={[canvas.x, canvas.y, arrowEnd.x, arrowEnd.y]} stroke="#6ee7f2" strokeWidth={2} dash={[5, 4]} listening={false} />}
             <Arrow points={[canvas.x, canvas.y, arrowEnd.x, arrowEnd.y]} stroke={selected ? '#6ee7f2' : '#fff3c6'} fill={selected ? '#6ee7f2' : '#fff3c6'} pointerLength={8} pointerWidth={8} strokeWidth={3} listening={false} />
             <Circle

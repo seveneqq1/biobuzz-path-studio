@@ -12,7 +12,7 @@ export interface CellPiece { kind: PieceKind; color?: 'red' | 'blue' }
 export interface Hive {
   side: number; tips: number; cells: [number, number]; angle: number; omega: number;
   contents: [CellPiece[], CellPiece[]]; tipping: boolean; targetSide: number;
-  spilling: number | null; spillClock: number;
+  spilling: number | null; spillClock: number; spillIndex:number; stopImpact:number;
 }
 export const pieceMass = (kind: PieceKind) => kind === 'nectar' ? .091 : .055
 export const pieceRadius = (kind: PieceKind) => kind === 'nectar' ? 1.8 : 1.4
@@ -23,7 +23,7 @@ export function createHive(side: number, color: 'red' | 'blue'): Hive {
   contents[side] = Array.from({length:3}, () => ({kind:'nectar' as const, color}))
   return {side,tips:0,cells:side===0?[3*pieceLoad('nectar'),0]:[0,3*pieceLoad('nectar')],
     angle:side===0?-HIVE.stopAngle:HIVE.stopAngle,omega:0,contents,tipping:false,
-    targetSide:side,spilling:null,spillClock:0}
+    targetSide:side,spilling:null,spillClock:0,spillIndex:0,stopImpact:0}
 }
 export function cellOpening(hive: Hive, side: number) {
   const sign = side===0 ? -1 : 1, c=Math.cos(hive.angle), s=Math.sin(hive.angle)
@@ -44,13 +44,15 @@ export function addCellPiece(hive: Hive, side: number, piece: CellPiece) {
   hive.cells[side]+=pieceLoad(piece.kind)
 }
 export interface Spill extends CellPiece {x:number;y:number;z:number;vx:number;vy:number;vz:number}
+const variation=(seed:number)=>{const n=Math.sin(seed*127.1+311.7)*43758.5453;return n-Math.floor(n)}
 
 // Over-centre load torque starts the transition; a damped joint settles against
 // the opposite stop. Piece release waits until the old opening points down.
 export function advanceHive(hive: Hive, dt: number): Spill[] {
+  hive.stopImpact*=Math.exp(-8*dt)
   const sign=hive.side===0?-1:1
   if(!hive.tipping && hive.cells[hive.side]>=8 && hive.spilling===null) {
-    hive.tipping=true;hive.targetSide=1-hive.side;hive.spilling=hive.side;hive.spillClock=0
+    hive.tipping=true;hive.targetSide=1-hive.side;hive.spilling=hive.side;hive.spillClock=0;hive.spillIndex=0
   }
   if(hive.tipping) {
     const loadTorque=-sign*Math.max(0,hive.cells[hive.side]-5)*160*Math.cos(hive.angle)
@@ -59,6 +61,7 @@ export function advanceHive(hive: Hive, dt: number): Spill[] {
     hive.angle+=hive.omega*dt
     const stop=hive.targetSide===0?-HIVE.stopAngle:HIVE.stopAngle
     if(hive.targetSide===0 ? hive.angle<=stop : hive.angle>=stop) {
+      hive.stopImpact=Math.min(35,Math.abs(hive.omega)*HIVE.outer)
       hive.angle=stop;hive.omega=0;hive.side=hive.targetSide;hive.tipping=false;hive.tips++
     }
   }
@@ -71,14 +74,18 @@ export function advanceHive(hive: Hive, dt: number): Spill[] {
         hive.spillClock-=.065
         const piece=hive.contents[side].shift()!,r=pieceRadius(piece.kind)
         hive.cells[side]=Math.max(0,hive.cells[side]-pieceLoad(piece.kind))
-        const lane=((hive.contents[side].length%4)-1.5)*(r*2+.1)
-        // Exit at the lower lip, not the pivot. Joint velocity + gravity-driven
-        // sliding down the cell determine velocity; there is no radial scatter.
-        const lip=localToHive(hive,(side===0?-1:1)*(HIVE.outer+r),HIVE.openingCenter-7+r)
-        const slide=Math.sqrt(2*GRAVITY*HIVE.depth*Math.max(.05,-opening.nz))*.38
+        const seed=1+hive.spillIndex++ + side*29+hive.tips*47,a=variation(seed),b=variation(seed+17),c=variation(seed+41)
+        const lane=((hive.spillIndex%4)-1.5)*(r*2+.1)+(b-.5)*r*.8
+        // Packing/lip deflections create a forward fan, never a radial explosion.
+        // Speed comes from gravitational drop + joint velocity and the stop's
+        // decaying jolt. Seeded variations keep identical runs reproducible.
+        const lip=localToHive(hive,(side===0?-1:1)*(HIVE.outer+r+.1+a*.3),HIVE.openingCenter-7+r+c*.35)
+        const slide=Math.sqrt(2*GRAVITY*HIVE.depth*Math.max(.05,-opening.nz))*(.64+.15*a)
+        const fan=(Math.sign(lane)||1)*(.09+.24*b),impact=hive.stopImpact*(.18+.18*c)
         spills.push({...piece,x:lip.x,y:lane,z:lip.z,
-          vx:opening.nx*slide-hive.omega*(lip.z-HIVE.pivot),vy:0,
-          vz:opening.nz*slide+hive.omega*lip.x})
+          vx:opening.nx*(slide*Math.cos(fan)+impact)-hive.omega*(lip.z-HIVE.pivot),
+          vy:opening.nx*slide*Math.sin(fan),
+          vz:opening.nz*slide+hive.omega*lip.x-impact*.3})
       }
       if(!hive.contents[side].length)hive.spilling=null
     }
