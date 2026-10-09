@@ -4,13 +4,25 @@ An interactive React + TypeScript route composer for the 2026–2027 FTC BIOBUZZ
 
 ## Run locally
 
-```bash
-cd /Users/akhmetshadmat/Desktop/Code/biobuzz-path-studio
+These commands work in **Windows Command Prompt or PowerShell, macOS Terminal, and Linux terminals**. Install Node.js 22.12 or newer (with npm) and Git first, then open a terminal in the folder where you want to download the project:
+
+```sh
+git clone https://github.com/seveneqq1/biobuzz-path-studio.git
+cd biobuzz-path-studio
 npm install
 npm run dev
 ```
 
-Open the localhost URL printed by Vite (usually http://localhost:5173). Keep the terminal running. Use `npm run test`, `npm run lint`, and `npm run build` to check the project.
+The `cd` command uses the repository folder name, not a personal username or operating-system-specific path. If the repository is private, GitHub access is required to clone it.
+
+Already downloaded the project? Open a terminal inside its folder (the one containing `package.json`) and run:
+
+```sh
+npm install
+npm run dev
+```
+
+Open the localhost URL printed by Vite (usually http://localhost:5173). Keep the terminal running; press Ctrl+C to stop. On Windows, if PowerShell blocks `npm.ps1`, use Command Prompt for the same commands. Use `npm run test`, `npm run lint`, and `npm run build` to check the project.
 
 ## Features
 
