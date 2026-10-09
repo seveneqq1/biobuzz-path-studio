@@ -2,6 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+.simulation-ui { position:absolute;z-index:7;left:12px;bottom:48px;max-width:calc(100% - 24px);color:#d6e8ed;font-size:11px; }
+.simulation-toolbar { display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:7px;background:#0b202ded;border:1px solid #375969;border-radius:8px; }
+.simulation-toolbar button,.simulation-status button { display:inline-flex;align-items:center;gap:6px;background:#193644;border:1px solid #42606c;border-radius:5px;padding:7px;cursor:pointer; }
+.simulation-toolbar button[aria-pressed=true] { color:#f2c94c;border-color:#f2c94c; }
+.simulation-toolbar select { width:64px;height:30px; }
+.simulation-status { display:flex;flex-wrap:wrap;gap:10px;padding:8px;background:#071923ef;border-radius:5px;max-width:560px; }
+.simulation-status small,.simulation-status strong { flex-basis:100%; }
+.simulation-status strong { color:#ffb774; }
+.robot-settings { position:absolute;bottom:48px;left:0;background:#102632;border:1px solid #456776;border-radius:10px;padding:16px;width:min(430px,calc(100vw - 36px));max-height:55vh;overflow:auto;box-shadow:0 15px 50px #0008; }
+.robot-settings h3 { font-size:16px;display:flex;justify-content:space-between;margin:0 0 10px; }
+.robot-settings h3 button { background:#284653;border:0;border-radius:4px;padding:3px 8px;cursor:pointer; }
+.robot-settings p { color:#9fb6c0;font-size:11px;line-height:1.5; }
+.robot-config-grid { display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px; }
+.robot-config-grid label { display:grid;gap:4px;font-size:11px; }
+@media(max-width:900px){.simulation-ui{bottom:94px}.robot-settings{max-height:40vh}}
+
 :root {
   font-family: Bahnschrift, "Arial Narrow", "Roboto Condensed", Arial, sans-serif;
   color: #e9f0ef;

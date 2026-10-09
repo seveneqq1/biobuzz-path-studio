@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
+import { useSimulation } from './Simulation'
 import { Arrow, Circle, Group, Image, Layer, Line, Shape, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
 import { Crosshair, Hand, MousePointer2, PenTool, RotateCcw, ScanLine, ZoomIn, ZoomOut } from 'lucide-react'
@@ -38,6 +39,7 @@ interface PendingAction { point: Point2D; sampleIndex: number; action: PathActio
 
 export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolChange, onSnapChange, onPointsChange, onSelect }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
+  const simulation=useSimulation(points)
   const stageRef = useRef<Konva.Stage>(null)
   const [size, setSize] = useState({ width: 760, height: 720 })
   const [scale, setScale] = useState(0.86)
@@ -190,7 +192,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
         ...sample.point,
         action: sample.action,
         id: crypto.randomUUID(),
-        heading: tangentDegrees(sample.point, worldSamples[index + 1]?.point ?? worldSamples[index - 1]?.point ?? sample.point),
+        heading: index===worldSamples.length-1 ? tangentDegrees(worldSamples[index-1].point,sample.point) : tangentDegrees(sample.point,worldSamples[index+1].point),
         interpolation: 'auto' as const,
         controlWeight: 1,
       }))
@@ -215,7 +217,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
     return { index, point, next, c1, c2 }
   }), [points])
 
-  const updatePoint = (id: string, changes: Partial<Waypoint>) => onPointsChange(points.map(p => p.id === id ? { ...p, ...changes } : p))
+  const updatePoint = (id: string, changes: Partial<Waypoint>) => onPointsChange(points.map(p => ({...p,...(p.id===id?changes:{}),...(changes.x!==undefined||changes.y!==undefined?{curve:undefined}:{})})))
 
   return <section className="field-panel" ref={wrapRef} aria-label="Interactive BIOBUZZ field">
     <div className="canvas-tools" role="toolbar" aria-label="Canvas tools">
@@ -315,8 +317,10 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
             </Group>}
           </Group>
         })}
+        {simulation.overlay}
       </Layer>
     </Stage>
+    {simulation.hud}
     <a className="field-credit" href="https://www.reddit.com/r/FTC/comments/1weleaj/biobuzz_custom_field_images_meepmeep_compatible/" target="_blank" rel="noreferrer">Field art: Team Juice 16236</a>
     <div className="canvas-hint">{tool === 'draw' ? 'Drag to sketch a new path' : tool === 'waypoint' ? 'Click the field to add a waypoint' : tool === 'pan' ? 'Drag to pan · scroll to zoom' : 'Drag nodes · drag the cyan handle to rotate'}</div>
   </section>

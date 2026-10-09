@@ -1,16 +1,17 @@
 import type { PathAction, SegmentDecision, Waypoint } from '../types'
-import { controls } from './geometry'
+import { controls, tangentDegrees } from './geometry'
+import { cubic } from './curveFit'
 
 const n = (value: number) => Number(value.toFixed(2)).toString()
 const point = (x: number, y: number) => `new Point(${n(x)}, ${n(y)}, Point.CARTESIAN)`
 
-function interpolation(decision: SegmentDecision, start: Waypoint, end: Waypoint) {
+function interpolation(decision: SegmentDecision, start: Waypoint, end: Waypoint, joinHeading: number) {
   const a = `Math.toRadians(${n(start.heading)})`
   const b = `Math.toRadians(${n(end.heading)})`
   switch (decision.type) {
     case 'constant': return `.setConstantHeadingInterpolation(${a})`
     case 'tangent': return '.setTangentHeadingInterpolation()'
-    case 'piecewise': return `.setHeadingInterpolation(\n                    Interpolator.piecewise()\n                        .until(0.68, Interpolator.tangent)\n                        .until(1.0, Interpolator.linear(${a}, ${b})))`
+    case 'piecewise': return `.setHeadingInterpolation(\n                    Interpolator.piecewise()\n                        .until(0.68, Interpolator.tangent)\n                        .until(1.0, Interpolator.linear(Math.toRadians(${n(joinHeading)}), ${b})))`
     default: return `.setLinearHeadingInterpolation(${a}, ${b})`
   }
 }
@@ -36,10 +37,13 @@ export function generateJava(points: Waypoint[], decisions: SegmentDecision[]) {
     const a = points[index]
     const b = points[index + 1]
     const { c1, c2 } = controls(points, index)
-    const geometry = decision.curvature < 3
+    const cross = (p: {x:number;y:number}) => Math.abs((b.x-a.x)*(p.y-a.y)-(b.y-a.y)*(p.x-a.x))
+    const straight = cross(c1)<1e-8 && cross(c2)<1e-8 && !a.curve
+    const geometry = straight
       ? `new BezierLine(${point(a.x, a.y)}, ${point(b.x, b.y)}))`
       : `new BezierCurve(\n                    ${point(a.x, a.y)},\n                    ${point(c1.x, c1.y)},\n                    ${point(c2.x, c2.y)},\n                    ${point(b.x, b.y)}))`
-    return `            .addPath(${geometry}\n            ${interpolation(decision, a, b)}`
+    const joinHeading=tangentDegrees(cubic(a,c1,c2,b,.679),cubic(a,c1,c2,b,.681))
+    return `            .addPath(${geometry}\n            ${interpolation(decision, a, b, joinHeading)}`
   }).join('\n')
 
   const pathFields = route.filter((item): item is Extract<RouteItem, { kind: 'path' }> => item.kind === 'path')

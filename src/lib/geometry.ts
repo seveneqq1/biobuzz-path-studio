@@ -32,6 +32,7 @@ export function canvasToWorld(point: Point2D, snap = false): Point2D {
 export function controls(points: Waypoint[], index: number) {
   const a = points[index]
   const b = points[index + 1]
+  if (a.curve?.endId === b.id) return { c1: a.curve.c1, c2: a.curve.c2 }
   const before = points[index - 1] ?? a
   const after = points[index + 2] ?? b
   const weight = ((a.controlWeight + b.controlWeight) / 2) / 6
@@ -64,98 +65,6 @@ export function simplify(points: Point2D[], tolerance = 3): Point2D[] {
   return [points[0], points[points.length - 1]]
 }
 
-function resamplePolyline(points: Waypoint[], count: number): Point2D[] {
-  const lengths = [0]
-  for (let i = 1; i < points.length; i++) lengths.push(lengths[i - 1] + distance(points[i - 1], points[i]))
-  const total = lengths.at(-1) ?? 0
-  if (!total) return Array.from({ length: count }, () => ({ x: points[0].x, y: points[0].y }))
-  return Array.from({ length: count }, (_, sample) => {
-    const target = total * sample / (count - 1)
-    let segment = 1
-    while (segment < lengths.length - 1 && lengths[segment] < target) segment++
-    const startDistance = lengths[segment - 1]
-    const segmentLength = Math.max(lengths[segment] - startDistance, .0001)
-    const t = (target - startDistance) / segmentLength
-    return {
-      x: points[segment - 1].x + (points[segment].x - points[segment - 1].x) * t,
-      y: points[segment - 1].y + (points[segment].y - points[segment - 1].y) * t,
-    }
-  })
-}
-
-function fourierLowPass(samples: Point2D[], harmonics: number): Point2D[] {
-  // Mirror the open path into a periodic signal so the DFT does not pull its endpoints together.
-  const signal = [...samples, ...samples.slice(1, -1).reverse()]
-  const size = signal.length
-  const coefficients = Array.from({ length: size }, (_, frequency) => {
-    let xReal = 0; let xImaginary = 0; let yReal = 0; let yImaginary = 0
-    for (let sample = 0; sample < size; sample++) {
-      const angle = -2 * Math.PI * frequency * sample / size
-      const cosine = Math.cos(angle); const sine = Math.sin(angle)
-      xReal += signal[sample].x * cosine; xImaginary += signal[sample].x * sine
-      yReal += signal[sample].y * cosine; yImaginary += signal[sample].y * sine
-    }
-    const keep = frequency <= harmonics || frequency >= size - harmonics
-    return keep ? { xReal, xImaginary, yReal, yImaginary } : { xReal: 0, xImaginary: 0, yReal: 0, yImaginary: 0 }
-  })
-  const reconstructed = samples.map((_, sample) => {
-    let x = 0; let y = 0
-    for (let frequency = 0; frequency < size; frequency++) {
-      const angle = 2 * Math.PI * frequency * sample / size
-      const cosine = Math.cos(angle); const sine = Math.sin(angle)
-      const coefficient = coefficients[frequency]
-      x += coefficient.xReal * cosine - coefficient.xImaginary * sine
-      y += coefficient.yReal * cosine - coefficient.yImaginary * sine
-    }
-    return { x: x / size, y: y / size }
-  })
-  reconstructed[0] = { x: samples[0].x, y: samples[0].y }
-  reconstructed[reconstructed.length - 1] = { x: samples.at(-1)!.x, y: samples.at(-1)!.y }
-  return reconstructed
-}
-
-function optimizeChunk(chunk: Waypoint[]) {
-  if (chunk.length <= 2) return chunk
-  const sampleCount = clamp(chunk.length * 6, 24, 64)
-  const samples = resamplePolyline(chunk, sampleCount)
-  const filtered = fourierLowPass(samples, clamp(Math.round(sampleCount / 8), 4, 9))
-  const targetCount = Math.max(2, Math.ceil(chunk.length * .55))
-  let tolerance = 1.25
-  let reduced = simplify(filtered, tolerance)
-  while (reduced.length > targetCount && tolerance < 8) {
-    tolerance *= 1.35
-    reduced = simplify(filtered, tolerance)
-  }
-  const start = chunk[0]
-  const end = chunk.at(-1)!
-  return reduced.map((point, index) => {
-    if (index === 0) return start
-    if (index === reduced.length - 1) return end
-    return {
-      ...point,
-      id: crypto.randomUUID(),
-      heading: tangentDegrees(reduced[index - 1], reduced[index + 1]),
-      interpolation: 'auto' as const,
-      controlWeight: 1,
-    }
-  })
-}
-
-export function optimizeWaypoints(points: Waypoint[]) {
-  if (points.length <= 2) return points
-  const boundaryIndexes = [0]
-  points.forEach((point, index) => { if (index > 0 && point.action) boundaryIndexes.push(index) })
-  if (boundaryIndexes.at(-1) !== points.length - 1) boundaryIndexes.push(points.length - 1)
-  const optimized: Waypoint[] = []
-  for (let i = 1; i < boundaryIndexes.length; i++) {
-    const chunk = points.slice(boundaryIndexes[i - 1], boundaryIndexes[i] + 1)
-    const next = optimizeChunk(chunk)
-    optimized.push(...(optimized.length ? next.slice(1) : next))
-  }
-  return optimized.map((point, index, path) => index === 0 || index === path.length - 1 || point.action
-    ? point
-    : { ...point, heading: tangentDegrees(path[index - 1], path[index + 1]) })
-}
 
 export function seedWaypoints(): Waypoint[] {
   return [

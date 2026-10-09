@@ -16,6 +16,7 @@ export interface Waypoint extends Point2D {
   interpolation: Interpolation
   controlWeight: number
   action?: PathAction
+  curve?: { endId: string; c1: Point2D; c2: Point2D }
 }
 
 export interface SegmentDecision {

@@ -3,7 +3,8 @@ import { Bug, ChevronDown, Download, Hexagon, Route, RotateCcw, Sparkles, Undo2 
 import { FieldCanvas } from './components/FieldCanvas'
 import { Inspector } from './components/Inspector'
 import { CodePanel } from './components/CodePanel'
-import { optimizeWaypoints, seedWaypoints } from './lib/geometry'
+import { seedWaypoints } from './lib/geometry'
+import { optimizeCurves } from './lib/curveFit'
 import { analyzePath } from './lib/optimizer'
 import { downloadJava, generateJava } from './lib/codegen'
 import type { CanvasTool, Waypoint } from './types'
@@ -29,7 +30,8 @@ export default function App() {
   }
   const updateSelected = (changes: Partial<Waypoint>) => {
     if (!selectedId) return
-    updatePoints(points.map(point => point.id === selectedId ? { ...point, ...changes } : point))
+    const geometric = changes.x !== undefined || changes.y !== undefined || changes.controlWeight !== undefined
+    updatePoints(points.map(point => ({ ...point, ...(point.id === selectedId ? changes : {}), ...(geometric ? {curve:undefined}: {}) })))
   }
   const undo = () => {
     const previous = history.at(-1)
@@ -44,7 +46,7 @@ export default function App() {
   }
   const optimizePath = () => {
     const before = points.length
-    const next = optimizeWaypoints(points)
+    const next = optimizeCurves(points)
     updatePoints(next)
     setPathOptimizationLabel(next.length < before ? `${before} → ${next.length} points` : 'Already minimal')
     window.setTimeout(() => setPathOptimizationLabel('Optimize path'), 2000)
