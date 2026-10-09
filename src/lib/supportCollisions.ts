@@ -31,20 +31,22 @@ export function segmentBoxDistance(a:Vec3,b:Vec3,half:Vec3) {
   return best
 }
 
-export function robotSupportCollision(pose:RobotPose,size:number,height=templateClearanceHeight(size)) {
+export function robotSupportCollision(pose:RobotPose,size:number,height=templateClearanceHeight(size),buffer=0) {
   const angle=pose.heading*Math.PI/180,c=Math.cos(angle),s=Math.sin(angle),half={x:size/2,y:size/2,z:height/2}
   const local=(p:Vec3):Vec3=>({x:(p.x-pose.x)*c+(p.y-pose.y)*s,y:-(p.x-pose.x)*s+(p.y-pose.y)*c,z:p.z-height/2})
   const extent=size/2*(Math.abs(c)+Math.abs(s))
   for(const solid of frameSolids) {
     if(solid.kind==='tube') {
-      if(Math.min(solid.a.z,solid.b.z)-solid.radius>=height || Math.max(solid.a.x,solid.b.x)+solid.radius<pose.x-extent || Math.min(solid.a.x,solid.b.x)-solid.radius>pose.x+extent || Math.max(solid.a.y,solid.b.y)+solid.radius<pose.y-extent || Math.min(solid.a.y,solid.b.y)-solid.radius>pose.y+extent)continue
-      if(segmentBoxDistance(local(solid.a),local(solid.b),half)<solid.radius-1e-7)return solid
+      const radius=solid.radius+buffer
+      if(Math.min(solid.a.z,solid.b.z)-radius>=height || Math.max(solid.a.x,solid.b.x)+radius<pose.x-extent || Math.min(solid.a.x,solid.b.x)-radius>pose.x+extent || Math.max(solid.a.y,solid.b.y)+radius<pose.y-extent || Math.min(solid.a.y,solid.b.y)-radius>pose.y+extent)continue
+      if(segmentBoxDistance(local(solid.a),local(solid.b),half)<radius-1e-7)return solid
     } else {
-      if(solid.center.z+solid.half.z<=0 || solid.center.z-solid.half.z>=height)continue
+      if(solid.center.z+solid.half.z+buffer<=0 || solid.center.z-solid.half.z-buffer>=height)continue
+      const hx=solid.half.x+buffer,hy=solid.half.y+buffer
       const dx=solid.center.x-pose.x,dy=solid.center.y-pose.y,h=size/2
       // Separating axes for the robot's oriented square and a world-axis box.
-      if(Math.abs(dx)>=solid.half.x+h*(Math.abs(c)+Math.abs(s))-1e-7 || Math.abs(dy)>=solid.half.y+h*(Math.abs(c)+Math.abs(s))-1e-7)continue
-      if(Math.abs(dx*c+dy*s)>=h+solid.half.x*Math.abs(c)+solid.half.y*Math.abs(s)-1e-7 || Math.abs(-dx*s+dy*c)>=h+solid.half.x*Math.abs(s)+solid.half.y*Math.abs(c)-1e-7)continue
+      if(Math.abs(dx)>=hx+h*(Math.abs(c)+Math.abs(s))-1e-7 || Math.abs(dy)>=hy+h*(Math.abs(c)+Math.abs(s))-1e-7)continue
+      if(Math.abs(dx*c+dy*s)>=h+hx*Math.abs(c)+hy*Math.abs(s)-1e-7 || Math.abs(-dx*s+dy*c)>=h+hx*Math.abs(s)+hy*Math.abs(c)-1e-7)continue
       return solid
     }
   }

@@ -8,6 +8,9 @@ interface Props {
   decision: SegmentDecision | null
   onChange: (changes: Partial<Waypoint>) => void
   onDelete: () => void
+  onSnapSafe:()=>void
+  snapMessage:string
+  shootWhileMoving:boolean
 }
 
 const interpolationOptions: { value: Interpolation; label: string }[] = [
@@ -18,7 +21,7 @@ const interpolationOptions: { value: Interpolation; label: string }[] = [
   { value: 'piecewise', label: 'Piecewise' },
 ]
 
-export function Inspector({ point, index, decision, onChange, onDelete }: Props) {
+export function Inspector({ point, index, decision, onChange, onDelete, onSnapSafe,snapMessage,shootWhileMoving }: Props) {
   if (!point) return <div className="inspector-empty">
     <div className="empty-orbit"><MapPin size={23} /></div>
     <h3>No waypoint selected</h3>
@@ -56,12 +59,14 @@ export function Inspector({ point, index, decision, onChange, onDelete }: Props)
       {point.action?.type === 'wait' && <label className="wait-input"><Timer size={14} /><input aria-label="Wait duration" type="number" min="100" step="100" value={point.action.durationMs ?? 100} onChange={event => onChange({ action: { ...point.action!, durationMs: Math.max(100, Math.round(Number(event.target.value) / 100) * 100) } })} /><span>ms</span></label>}
       {point.action && <>
         <label className="command-label">Ivy composition
-          <select aria-label="Ivy composition" value={point.action.composition ?? 'sequential'} onChange={event => onChange({action: {...point.action!, composition: event.target.value as 'sequential' | 'parallel' | 'deadline'}})}>
-            <option value="sequential">Sequential · then drive</option>
+          <select aria-label="Ivy composition" value={point.action.type==='shoot'&&shootWhileMoving?point.action.composition==='deadline'?'deadline':'parallel':point.action.composition ?? 'sequential'} onChange={event => onChange({action: {...point.action!, composition: event.target.value as 'sequential' | 'parallel' | 'deadline'}})}>
+            <option value="sequential" disabled={point.action.type==='shoot'&&shootWhileMoving}>Sequential · then drive</option>
             <option value="parallel">Parallel · with next path</option>
             <option value="deadline">Deadline · until next path ends</option>
           </select>
         </label>
+        {point.action.type==='shoot'&&shootWhileMoving&&<p>Shoot while moving is on. This command runs alongside the next path; turn the toggle off for a stopped shot.</p>}
+        {point.action.type==='flowerIntake'&&<p>Removing pollen from a flower does not award points. Flower scoring is an end-of-match achievement, not AUTO scoring.</p>}
         {point.action.type !== 'wait' && point.action.type !== 'intake' && <label className="command-label">Timeout race (0 = none)
           <div className="wait-input"><Timer size={14}/><input aria-label="Command timeout" type="number" min="0" step="100" value={point.action.timeoutMs ?? 0} onChange={event => onChange({action: {...point.action!, timeoutMs: Math.max(0, Math.round(Number(event.target.value) / 100) * 100)}})}/><span>ms</span></div>
         </label>}
@@ -75,6 +80,8 @@ export function Inspector({ point, index, decision, onChange, onDelete }: Props)
         <label><span>X</span><input type="number" min="0" max="144" step="0.1" value={Number(point.x.toFixed(1))} onChange={e => numberChange('x', e.target.value)} /></label>
         <label><span>Y</span><input type="number" min="0" max="144" step="0.1" value={Number(point.y.toFixed(1))} onChange={e => numberChange('y', e.target.value)} /></label>
       </div>
+      <button className="safe-snap-button" onClick={onSnapSafe}><MapPin size={14}/>Snap to nearest safe spot <small>+1 in buffer</small></button>
+      {snapMessage&&<p className="inspector-help" role="status">{snapMessage}</p>}
     </div>
 
     <div className="field-group">
@@ -86,6 +93,7 @@ export function Inspector({ point, index, decision, onChange, onDelete }: Props)
       <div className="heading-compass" aria-hidden="true">
         {[0, 90, 180, 270].map(deg => <i key={deg} style={{ transform: `rotate(${-deg}deg)` }}>{deg}°</i>)}
       </div>
+      <p className="inspector-help">Heading is independent of the curve. Editing it switches adjacent segments to linear headings. In 3D, use A/D or ←/→, W/S for ±90°, then Enter to apply.</p>
     </div>
 
     <div className="field-group">

@@ -2,6 +2,7 @@ import * as T from 'three'
 import { HIVE, pieceRadius } from './hivePhysics'
 import type { PieceKind } from './hivePhysics'
 import { frameSolids } from './fieldGeometry'
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 
 export const materials = () => ({
   steel: new T.MeshStandardMaterial({color:0xa9b7be,metalness:.75,roughness:.32}),
@@ -33,31 +34,39 @@ export function label(text:string,color='#22303b',background='#edf1f2',width=18,
   const sprite=new T.Sprite(new T.SpriteMaterial({map:texture,depthTest:false}));sprite.scale.set(width,height,1);return sprite
 }
 
-function ballShell() {
-  const geometry=new T.SphereGeometry(1,28,20),p=geometry.getAttribute('position'),indices=geometry.index!,keep:number[]=[]
-  const holes:T.Vector3[]=[]
+export function pieceHoleDirections() {
+  const holes:T.Vector3[]=[new T.Vector3(0,1,0),new T.Vector3(0,-1,0)]
   for(const z of [-.72,0,.72])for(let i=0;i<6;i++){
     const a=(i+ (z===0?.5:0))*Math.PI/3
     holes.push(new T.Vector3(Math.sqrt(1-z*z)*Math.cos(a),z,Math.sqrt(1-z*z)*Math.sin(a)))
   }
-  const center=new T.Vector3()
-  for(let i=0;i<indices.count;i+=3){
-    const a=indices.getX(i),b=indices.getX(i+1),c=indices.getX(i+2)
-    center.set(p.getX(a)+p.getX(b)+p.getX(c),p.getY(a)+p.getY(b)+p.getY(c),p.getZ(a)+p.getZ(b)+p.getZ(c)).normalize()
-    if(!holes.some(h=>h.dot(center)>.979))keep.push(a,b,c)
-  }
-  geometry.setIndex(keep);return geometry
+  return holes
 }
-// One shared shell geometry for the perforated game pieces.
-export function gamePieceFactory(m:Mats) {
-  const shell=ballShell(),core=new T.SphereGeometry(.88,16,12)
-  const pollen=new T.MeshStandardMaterial({color:0xffcb39,roughness:.62,side:T.DoubleSide})
-  const inside=new T.MeshStandardMaterial({color:0x4a421d,roughness:1})
-  return (kind:PieceKind,color?:'red'|'blue')=>{
-    const group=new T.Group(),surface=kind==='pollen'?pollen:color==='blue'?m.blue:m.red
-    const mesh=new T.Mesh(shell,surface);mesh.castShadow=true;mesh.receiveShadow=true
-    group.add(mesh,new T.Mesh(core,inside));group.scale.setScalar(pieceRadius(kind));return group
+// Analytic fragment cutouts keep holes circular at every distance. A hollow
+// inner wall and rounded lips replace the jagged triangle cuts/dark solid core.
+export function gamePieceFactory() {
+  const holes=pieceHoleDirections(),shell=new T.SphereGeometry(1,64,40),inner=new T.SphereGeometry(.91,48,32)
+  const lips=holes.map(direction=>{
+    const geometry=new T.TorusGeometry(Math.sqrt(1-.985**2),.012,6,24)
+    geometry.applyMatrix4(new T.Matrix4().compose(direction.clone().multiplyScalar(.985),new T.Quaternion().setFromUnitVectors(new T.Vector3(0,0,1),direction),new T.Vector3(1,1,1)))
+    return geometry
+  })
+  const rims=mergeGeometries(lips)!;lips.forEach(g=>g.dispose())
+  const plastic=(color:number,inside=false)=>{
+    const material=new T.MeshStandardMaterial({color,metalness:0,roughness:inside?.75:.48,side:inside?T.BackSide:T.DoubleSide})
+    material.onBeforeCompile=shader=>{
+      shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>\nvarying vec3 vPiecePosition;').replace('#include <begin_vertex>','#include <begin_vertex>\nvPiecePosition = position;')
+      shader.fragmentShader=shader.fragmentShader.replace('#include <common>','#include <common>\nvarying vec3 vPiecePosition;').replace('#include <alphatest_fragment>',`#include <alphatest_fragment>\nvec3 pieceDirection = normalize(vPiecePosition);\n${holes.map(h=>`if (dot(pieceDirection, vec3(${h.x.toFixed(7)}, ${h.y.toFixed(7)}, ${h.z.toFixed(7)})) > 0.985) discard;`).join('\n')}`)
+    }
+    material.customProgramCacheKey=()=> 'sana-perforated-plastic-v1'
+    return material
   }
+  const colors=[0xffcc29,0xe83c50,0x347de5],outside=colors.map(c=>plastic(c)),inside=colors.map(c=>plastic(new T.Color(c).multiplyScalar(.64).getHex(),true)),edges=colors.map(c=>new T.MeshStandardMaterial({color:c,roughness:.55,metalness:0}))
+  return Object.assign((kind:PieceKind,color?:'red'|'blue')=>{
+    const index=kind==='pollen'?0:color==='blue'?2:1,group=new T.Group()
+    const mesh=new T.Mesh(shell,outside[index]);mesh.castShadow=true;mesh.receiveShadow=true
+    group.add(mesh,new T.Mesh(inner,inside[index]),new T.Mesh(rims,edges[index]));group.scale.setScalar(pieceRadius(kind));return group
+  },{dispose:()=>{shell.dispose();inner.dispose();rims.dispose();[...outside,...inside,...edges].forEach(m=>m.dispose())}})
 }
 
 export function buildField(scene:T.Scene,m:Mats,dark=false) {
@@ -128,8 +137,8 @@ export function buildHive(color:'red'|'blue',m:Mats) {
 
 export function buildFlower(parent:T.Object3D,x:number,y:number,m:Mats) {
   const root=new T.Group();root.position.set(x-72,0,72-y);parent.add(root)
-  for(const height of [1.2,12,22]){
-    const ring=new T.Mesh(new T.TorusGeometry(2.4,.35,8,24),height===22?m.amber:m.dark)
+  for(const height of [1.2,12,21.5]){
+    const ring=new T.Mesh(new T.TorusGeometry(2.4,.35,8,24),height===21.5?m.amber:m.dark)
     ring.rotation.x=Math.PI/2;ring.position.y=height;root.add(ring)
   }
   for(const a of [0,Math.PI/2,Math.PI,Math.PI*1.5])rod(root,[Math.cos(a)*2.3,1.2,Math.sin(a)*2.3],[Math.cos(a)*2.3,22,Math.sin(a)*2.3],.28,m.green)

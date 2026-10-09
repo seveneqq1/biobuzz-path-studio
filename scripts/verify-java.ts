@@ -81,7 +81,7 @@ for(let variant=0;variant<3;variant++){
   points[4].action={type:'wait',durationMs:700}
   points[5].action={type:'shoot',composition:'parallel'}
   const name=`SanaAuto${variant}`
-  files[`${name}.java`]=generateJava(points,analyzePath(points),{...defaultConfig,alliance:variant===2?'blue':'red',autoAim:variant!==2,intakeMaterial:variant===2?'silicone':'gecko'}).replace('public class SanaAuto ',`public class ${name} `)
+  files[`${name}.java`]=generateJava(points,analyzePath(points),{...defaultConfig,shootWhileMoving:variant===1,alliance:variant===2?'blue':'red',autoAim:variant!==2,intakeMaterial:variant===2?'silicone':'gecko'}).replace('public class SanaAuto ',`public class ${name} `)
 }
 for(const [name,text] of Object.entries(files))await writeFile(join(source,name),text)
 const classpath=['pedro-core.jar','ivy-core.jar','classes.jar'].map(name=>join(root,name)).join(delimiter)

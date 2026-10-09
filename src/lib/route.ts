@@ -10,13 +10,17 @@ export function nextPathEnd(points: Waypoint[], node: number) {
   return points.length - 1
 }
 
-export function compileRoute(points: Waypoint[]): RouteStep[] {
+export const routeActions=(points:Waypoint[],shootWhileMoving=false)=>points.map((point,node)=>
+  point.action?.type==='shoot'&&shootWhileMoving&&node<points.length-1
+    ? {...point.action,composition:point.action.composition==='deadline'?'deadline' as const:'parallel' as const}:point.action)
+
+export function compileRoute(points: Waypoint[],shootWhileMoving=false): RouteStep[] {
   const raw: (RoutePath | Extract<RouteStep, {kind: 'action'}>)[] = []
   let start = 0, number = 0
-  points.forEach((point, node) => {
-    if (!point.action) return
+  routeActions(points,shootWhileMoving).forEach((action, node) => {
+    if (!action) return
     if (node > start) raw.push({kind: 'path', name: `path${number++}`, startIndex: start, endIndex: node})
-    raw.push({kind: 'action', action: point.action, node})
+    raw.push({kind: 'action', action, node})
     start = node
   })
   if (start < points.length - 1) raw.push({kind: 'path', name: `path${number++}`, startIndex: start, endIndex: points.length - 1})

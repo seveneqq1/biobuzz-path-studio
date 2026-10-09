@@ -45,7 +45,7 @@ interface PendingAction { point: Point2D; sampleIndex: number; action: PathActio
 
 export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,onConfigChange,theme,onToolChange, onSnapChange, onPointsChange, onSelect }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
-  const simulation=useSimulation(points,config,onConfigChange,theme)
+  const simulation=useSimulation(points,config,onConfigChange,theme,{selectedId,onSelect,onPointsChange})
   const supportMarker=simulation.route.supportCollision?worldToCanvas(simulation.route.supportCollision.sample):null
   const stageRef = useRef<Konva.Stage>(null)
   const [size, setSize] = useState({ width: 760, height: 720 })
@@ -113,15 +113,21 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,
 
   useEffect(() => {
     if (!wrapRef.current) return
-    const resize = new ResizeObserver(([entry]) => {
-      const { width, height } = entry.contentRect
-      wrapRef.current?.style.setProperty('--field-height',`${height}px`)
+    const element=wrapRef.current
+    const fitView=()=>{
+      const {width,height}=element.getBoundingClientRect()
+      element.style.setProperty('--field-height',`${height}px`)
       setSize({ width, height })
-      const fit = Math.min((width - 56) / FIELD_PIXELS, (height - (width<560?210:170)) / FIELD_PIXELS)
-      setScale(clamp(fit, 0.38, 1.4))
-      setPosition({ x: Math.max(28, (width - FIELD_PIXELS * fit) / 2), y: 24 })
-    })
-    resize.observe(wrapRef.current)
+      const dockHeight=element.querySelector('.simulation-ui')?.getBoundingClientRect().height??100
+      const available=Math.max(90,height-dockHeight-142)
+      const fit=clamp(Math.min((width-56)/FIELD_PIXELS,available/FIELD_PIXELS),.12,1.4)
+      setScale(fit)
+      setPosition({x:(width-FIELD_PIXELS*fit)/2,y:72+Math.max(0,(available-FIELD_PIXELS*fit)/2)})
+    }
+    const resize = new ResizeObserver(fitView)
+    resize.observe(element)
+    const dock=element.querySelector('.simulation-ui');if(dock)resize.observe(dock)
+    fitView()
     return () => resize.disconnect()
   }, [])
 
@@ -275,9 +281,10 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,
         {pathShapes.map(({ index, point, next, c1, c2 }) => {
           const p0 = worldToCanvas(point); const p1 = worldToCanvas(c1); const p2 = worldToCanvas(c2); const p3 = worldToCanvas(next)
           const selected = selectedId === point.id || selectedId === next.id
+          const unsafe=simulation.route.unsafeSegments.includes(index)
           return <Group key={next.id}>
             <Shape sceneFunc={(ctx, shape) => { ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y); ctx.fillStrokeShape(shape) }} stroke="#09141b" strokeWidth={11} lineCap="round" listening={false} />
-            <Shape sceneFunc={(ctx, shape) => { ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y); ctx.fillStrokeShape(shape) }} stroke={selected ? '#6ee7f2' : '#f2c94c'} strokeWidth={5} lineCap="round" dash={decisions[index]?.type === 'piecewise' ? [16, 7] : undefined} listening={false} />
+            <Shape sceneFunc={(ctx, shape) => { ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y); ctx.fillStrokeShape(shape) }} stroke={unsafe?'#ff6b72':selected ? '#6ee7f2' : '#f2c94c'} strokeWidth={unsafe?7:5} lineCap="round" dash={unsafe?[12,5]:decisions[index]?.type === 'piecewise' ? [16, 7] : undefined} listening={false} />
             <Circle x={(p0.x + p3.x) / 2} y={(p0.y + p3.y) / 2} radius={12} fill="#f2c94c" stroke="#0d1e28" strokeWidth={2} listening={false} />
             <Text x={(p0.x + p3.x) / 2 - 13} y={(p0.y + p3.y) / 2 - 12} text={`${index + 1}`} width={26} height={24} align="center" verticalAlign="middle" fill="#08161f" fontSize={13} fontStyle="bold" listening={false} />
           </Group>

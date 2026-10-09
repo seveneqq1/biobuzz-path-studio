@@ -19,6 +19,9 @@ export function analyzeSegment(points: Waypoint[], index: number): SegmentDecisi
     curvature,
     rotationRate,
   }
+  if(start.headingLocked||end.headingLocked)return {
+    type:'linear',reason:'Manually edited pose headings stay independent of the curve tangent.',curvature,rotationRate,
+  }
 
   if (headingDelta < 4) return {
     type: 'constant',

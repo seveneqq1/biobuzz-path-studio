@@ -17,6 +17,7 @@ export interface Waypoint extends Point2D {
   heading: number
   interpolation: Interpolation
   controlWeight: number
+  headingLocked?:boolean
   action?: PathAction
   curve?: { endId: string; c1: Point2D; c2: Point2D }
 }

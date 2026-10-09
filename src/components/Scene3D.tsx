@@ -42,7 +42,7 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack,the
     light.shadow.camera.top=115;light.shadow.camera.bottom=-115;light.shadow.camera.near=1;light.shadow.camera.far=380;light.shadow.bias=-.0008
     scene.add(light,new T.DirectionalLight(0xc4ddff,1.3))
     const m=materials();buildField(scene,m,theme==='dark');buildHiveFrame(scene,m)
-    const createPiece=gamePieceFactory(m)
+    const createPiece=gamePieceFactory()
     const joints=hiveCenters.map((center,i)=>{
       const joint=buildHive(i===0?'red':'blue',m);joint.position.set(center.x-72,HIVE.pivot,72-center.y);scene.add(joint)
       const storage=[new T.Group(),new T.Group()];joint.add(...storage)
@@ -62,6 +62,10 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack,the
     }
     if(route.supportCollision){const point=route.supportCollision.sample,marker=new T.Mesh(new T.TorusGeometry(2.3,.35,8,24),m.red)
       marker.rotation.x=Math.PI/2;marker.position.set(point.x-72,.6,72-point.y);scene.add(marker)}
+    for(const segment of route.unsafeSegments){
+      const points=route.samples.filter(p=>p.segment===segment).map(p=>new T.Vector3(p.x-72,.65,72-p.y))
+      if(points.length>1)scene.add(new T.Mesh(new T.TubeGeometry(new T.CatmullRomCurve3(points),80,.45,6,false),new T.MeshBasicMaterial({color:0xff5969})))
+    }
     const ballMeshes=new Map<number,T.Group>()
     let previousMode:CameraMode='orbit',dragging:number|null=null
     let shotBlend=0,lastFrame=performance.now()
@@ -115,7 +119,7 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack,the
         }
       })
       robot.root.position.set(state.x-72,0,72-state.y);robot.root.rotation.y=state.heading*Math.PI/180
-      robot.wheels.forEach(w=>{w.rotation.z=-state.driveTime*route.maxSpeed/(config.wheel/2)})
+      robot.wheels.forEach(w=>{w.rotation.z=-state.travelled/(config.wheel/2)})
       robot.intakeWheels.forEach(w=>{w.rotation.z=state.intake?-state.time*12:0})
       robot.transferRollers.forEach((w,i)=>{w.rotation.z=state.feeder.length||state.activeType==='transfer'?state.time*10*(i%2===0?-1:1):0})
       robot.gate.rotation.z=state.shooting && state.turretReady?-.7:0
@@ -152,7 +156,7 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack,the
       scene.traverse(node=>{if(node instanceof T.Mesh || node instanceof T.Sprite){if(node instanceof T.Mesh)geometries.add(node.geometry)
         const list=Array.isArray(node.material)?node.material:[node.material];for(const mat of list){mats.add(mat);if('map' in mat && mat.map instanceof T.Texture)textures.add(mat.map)}}})
       geometries.forEach(g=>g.dispose());mats.forEach(m=>m.dispose());textures.forEach(t=>t.dispose())
-      renderer.dispose();renderer.domElement.remove()
+      createPiece.dispose();renderer.dispose();renderer.domElement.remove()
     }
   },[config,route,theme])
   return <div className="scene-three" aria-label="3D BIOBUZZ simulation">

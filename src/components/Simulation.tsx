@@ -7,8 +7,10 @@ import { flowers, hiveCenters, profile, resetSimulation, stepSimulation } from '
 import type { RobotConfig } from '../lib/simulation'
 import { cellOpening, pieceRadius } from '../lib/hivePhysics'
 import { ThreePreview } from './ThreePreview'
+import { usePreviewHeading } from './usePreviewHeading'
+import { AutoScoreboard } from './AutoScoreboard'
 
-const fields: {key:Exclude<keyof RobotConfig,'alliance'|'autoAim'|'intakeMaterial'>;label:string;min:number;max:number;step:number}[]=[
+const fields: {key:Exclude<keyof RobotConfig,'alliance'|'autoAim'|'intakeMaterial'|'shootWhileMoving'>;label:string;min:number;max:number;step:number}[]=[
   {key:'rpm',label:'Motor output RPM',min:1,max:6000,step:1},
   {key:'wheel',label:'Wheel diameter (in)',min:1,max:8,step:.1},
   {key:'gearing',label:'Motor : wheel ratio',min:.1,max:20,step:.1},
@@ -41,7 +43,7 @@ function robotPNG() {
   return canvas.toDataURL('image/png')
 }
 
-export function useSimulation(points:Waypoint[],config:RobotConfig,setConfig:(config:RobotConfig)=>void,theme:'light'|'dark') {
+export function useSimulation(points:Waypoint[],config:RobotConfig,setConfig:(config:RobotConfig)=>void,theme:'light'|'dark',editor:{selectedId:string|null;onSelect:(id:string|null)=>void;onPointsChange:(points:Waypoint[])=>void}) {
   const dock=useRef<HTMLDivElement>(null)
   const [enabled,setEnabled]=useState(false),[running,setRunning]=useState(false),[settings,setSettings]=useState(false)
   const [threeD,setThreeD]=useState(false)
@@ -49,6 +51,7 @@ export function useSimulation(points:Waypoint[],config:RobotConfig,setConfig:(co
   const route=useMemo(()=>profile(points,config),[points,config])
   const engine=useRef(resetSimulation(points,config))
   const [view,setView]=useState(()=>resetSimulation(points,config))
+  const heading=usePreviewHeading({enabled:threeD&&!settings,points,config,view,...editor,onPause:()=>setRunning(false)})
   const [sprite,setSprite]=useState<HTMLImageElement>()
   useEffect(()=>{
     const element=dock.current
@@ -78,13 +81,13 @@ export function useSimulation(points:Waypoint[],config:RobotConfig,setConfig:(co
     frame=requestAnimationFrame(tick)
     return ()=>cancelAnimationFrame(frame)
   },[running,enabled,speed,points,config,route])
-  const reset=()=>{engine.current=resetSimulation(points,config);setView(structuredClone(engine.current));setRunning(false)}
-  const plan=()=>{setThreeD(false);setRunning(false);setEnabled(false)}
+  const reset=()=>{heading.cancel();engine.current=resetSimulation(points,config);setView(structuredClone(engine.current));setRunning(false)}
+  const plan=()=>{heading.cancel();setThreeD(false);setRunning(false);setEnabled(false)}
   const moveBall=(id:number,x:number,y:number)=>{
     const ball=engine.current.balls.find(b=>b.id===id)
     if(ball && !running){ball.x=x;ball.y=y;ball.vx=0;ball.vy=0;ball.vz=0;ball.z=pieceRadius(ball.kind);setView(structuredClone(engine.current))}
   }
-  const play=()=>{if(view.finished)reset();setEnabled(true);setThreeD(true);setRunning(!running)}
+  const play=()=>{heading.cancel();if(view.finished)reset();setEnabled(true);setThreeD(true);setRunning(!running)}
   const robot=worldToCanvas(view)
   const clearance=route.wallCollision?{sample:route.wallCollision,name:'Field wall'}:route.supportCollision
   const hud=<div className="simulation-ui" ref={dock}>
@@ -95,6 +98,7 @@ export function useSimulation(points:Waypoint[],config:RobotConfig,setConfig:(co
       </div>
       <div className="runtime-estimate" title="Drive time plus inventory-dependent shooting delays"><span>{clearance?'Obstacle clearance':'Estimated run'}</span><strong>{clearance?'Unsafe route':<>{route.min.toFixed(1)}{route.max>route.min?`–${route.max.toFixed(1)}`:''}<small> s</small></>}</strong></div>
       <div className="playback-controls">
+        <label className="moving-shot-toggle"><input type="checkbox" checked={config.shootWhileMoving} onChange={e=>setConfig({...config,shootWhileMoving:e.target.checked})}/>Shoot while moving</label>
         <button className="robot-setup-button" aria-label="Robot configuration" onClick={()=>setSettings(!settings)}><Settings2 size={16}/><span>Robot setup</span></button>
         <select aria-label="Playback speed" value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option></select>
         <button className="reset-playback" onClick={reset} aria-label="Reset simulation"><RotateCcw size={15}/></button>
@@ -109,13 +113,16 @@ export function useSimulation(points:Waypoint[],config:RobotConfig,setConfig:(co
       <span className="tip-count red">Red tips <b>{view.hives[0].tips}</b></span><span className="tip-count blue">Blue tips <b>{view.hives[1].tips}</b></span>
       {view.warning && <strong>{view.warning}</strong>}
     </div>}
-    {clearance && !view.blocked && <div className="route-safety" role="status">{clearance.name} clearance needed near ({clearance.sample.x.toFixed(1)}, {clearance.sample.y.toFixed(1)}). Your rotated {config.size}-inch robot will stop at contact.</div>}
+    {clearance && !view.blocked && <div className="route-safety" role="status">Unsafe path segments: {route.unsafeSegments.map(i=>i+1).join(', ')}. {clearance.name} near ({clearance.sample.x.toFixed(1)}, {clearance.sample.y.toFixed(1)}). Safe waypoints do not guarantee a safe curve. Red segments will stop the robot at contact.</div>}
+    {threeD&&heading.controls}
+    {enabled&&<AutoScoreboard state={view} config={config}/>}
     {settings && <div className="robot-settings">
       <h3>Robot setup <button aria-label="Close robot configuration" onClick={()=>setSettings(false)}><X size={17}/></button></h3>
       <p>Use measured drive force and loaded speed to calibrate timing. Changing these settings resets the run.</p>
       <label>Alliance<select value={config.alliance} onChange={e=>setConfig({...config,alliance:e.target.value as 'red'|'blue'})}><option value="red">Red</option><option value="blue">Blue</option></select></label>
       <label>Intake wheels<select value={config.intakeMaterial} onChange={e=>setConfig({...config,intakeMaterial:e.target.value as RobotConfig['intakeMaterial']})}><option value="gecko">Gecko</option><option value="silicone">Silicone</option></select></label>
       <label><input type="checkbox" checked={config.autoAim} onChange={e=>setConfig({...config,autoAim:e.target.checked})}/> Automatically aim launch elevation at the raised cell</label>
+      <p>Moving shots overlap the next path and join before the next command. Use only if your real robot can track targets while driving. Automatic elevation includes a constant-velocity lead estimate; manual elevation does not compensate flight.</p>
       <div className="robot-config-grid">{fields.map(f=><label key={f.key}>{f.label}<input type="number" min={f.min} max={f.max} step={f.step} value={config[f.key]} onChange={e=>{const n=Number(e.target.value);if(Number.isFinite(n))setConfig({...config,[f.key]:Math.max(f.min,Math.min(f.max,n))})}}/></label>)}</div>
       <div className="model-summary"><span>Loaded speed <b>{route.maxSpeed.toFixed(1)} in/s</b></span><span>Acceleration <b>{route.acceleration.toFixed(1)} in/s²</b></span></div>
       <p>Front wheel intake feeds a timed indexer. The independent turret gates shots on alignment. Walls and hive supports stop the route; balls rebound from support tubes, feet and panels. Support checks use a conservative box up to the template’s maximum turret height. This is approximate physics; validate clearances and timings on your robot.</p>
@@ -141,6 +148,6 @@ export function useSimulation(points:Waypoint[],config:RobotConfig,setConfig:(co
       {view.intake && <Rect x={-config.size*2} y={-config.size*2.8} width={config.size*4} height={5} fill="#70efbd"/>}
     </Group>
   </Group>
-  const scene=threeD && <ThreePreview view={view} config={config} route={route} running={running} onBallMove={moveBall} onBack={plan} theme={theme}/>
+  const scene=threeD && <ThreePreview view={heading.pose} config={config} route={route} running={running&&!heading.editing} onBallMove={moveBall} onBack={plan} theme={theme}/>
   return {hud,overlay,scene,threeD,route}
 }

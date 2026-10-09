@@ -9,6 +9,7 @@ import { analyzePath } from './lib/optimizer'
 import { downloadJava, generateJava } from './lib/codegen'
 import type { CanvasTool, Waypoint } from './types'
 import { defaultConfig, profile } from './lib/simulation'
+import { nearestSafePose } from './lib/safeSpot'
 
 export default function App() {
   const [points, setPoints] = useState<Waypoint[]>(seedWaypoints)
@@ -25,6 +26,8 @@ export default function App() {
   useEffect(()=>{document.documentElement.dataset.theme=theme;try{localStorage.setItem('sana-theme',theme)}catch{/* optional persistence */}},[theme])
   const [optimized, setOptimized] = useState(false)
   const [pathOptimizationLabel, setPathOptimizationLabel] = useState('Optimize path')
+  const [snapMessage,setSnapMessage]=useState('')
+  const [snappedId,setSnappedId]=useState<string|null>(null)
   const decisions = useMemo(() => analyzePath(points), [points])
   const code = useMemo(() => generateJava(points, decisions,config), [points, decisions,config])
   const selectedIndex = points.findIndex(point => point.id === selectedId)
@@ -65,7 +68,7 @@ export default function App() {
     <header className="topbar">
       <div className="brand">
         <div className="brand-mark"><Hexagon size={30} /><Route size={15} /></div>
-        <div><h1>SANA <span>path</span></h1><p>FTC autonomous workbench</p></div>
+        <div><h1>SANA <span>path</span><small className="presenter">(Presented by SANA #24697)</small></h1><p>FTC autonomous workbench</p></div>
       </div>
       <div className="header-controls">
         <span className="season-select">BIOBUZZ 2026–27</span>
@@ -98,6 +101,16 @@ export default function App() {
           <Inspector
             point={selectedPoint} index={selectedIndex} decision={selectedDecision}
             onChange={updateSelected}
+            snapMessage={snappedId===selectedId?snapMessage:''}
+            shootWhileMoving={config.shootWhileMoving&&selectedIndex<points.length-1}
+            onSnapSafe={()=>{
+              if(!selectedPoint)return
+              setSnappedId(selectedPoint.id)
+              const safe=nearestSafePose(selectedPoint,config.size,1)
+              if(!safe){setSnapMessage('No buffered safe spot found for this footprint.');return}
+              updateSelected({x:safe.x,y:safe.y})
+              setSnapMessage(`Snapped to (${safe.x.toFixed(2)}, ${safe.y.toFixed(2)}) with 1 in clearance. Adjacent curves are checked separately.`)
+            }}
             onDelete={() => {
               if (!selectedId) return
               updatePoints(points.filter(point => point.id !== selectedId))

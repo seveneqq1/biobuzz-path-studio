@@ -1,6 +1,6 @@
 import type { PathAction, SegmentDecision, Waypoint } from '../types'
 import { controls } from './geometry'
-import { compileRoute } from './route'
+import { compileRoute, routeActions } from './route'
 import { defaultConfig, profile } from './simulation'
 import type { RobotConfig } from './simulation'
 import { cellOpening, createHive } from './hivePhysics'
@@ -20,9 +20,9 @@ function interpolation(decision: SegmentDecision, start: number, end: number, po
 
 export function generateJava(points: Waypoint[], decisions: SegmentDecision[],config:RobotConfig=defaultConfig) {
   if (points.length < 2) return '// Add at least two waypoints to generate a path.'
-  const route = compileRoute(points)
+  const route = compileRoute(points,config.shootWhileMoving)
   const paths = route.flatMap(step => step.kind === 'path' ? [step] : step.kind === 'group' ? [step.path] : [])
-  const actions = points.flatMap(point => point.action ? [point.action] : [])
+  const actions = routeActions(points,config.shootWhileMoving).flatMap(action => action ? [action] : [])
   const used = new Set(actions.map(action => action.type))
   const safety=profile(points,config),collision=safety.wallCollision,support=safety.supportCollision
   const opening=cellOpening(createHive(config.alliance==='red'?1:0,config.alliance),config.alliance==='red'?1:0)
@@ -86,17 +86,31 @@ export function generateJava(points: Waypoint[], decisions: SegmentDecision[],co
         double elevation = Math.toRadians(${n(config.shotAngle)});
         ${config.autoAim?`double range = Math.max(0.01, Math.hypot(dx, dy));
         double speedSquared = ${n(config.shotSpeed**2)}; // calibrate measured exit speed
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 10; i++) {
             double horizontal = Math.max(0.01, range - ${n(config.size*.42)} * Math.cos(elevation));
             double rise = hiveTargetHeight() - (18 + ${n(config.size*.42)} * Math.sin(elevation));
             double discriminant = speedSquared * speedSquared - 386.09 *
                 (386.09 * horizontal * horizontal + 2 * rise * speedSquared);
             if (discriminant < 0) throw new IllegalStateException("Hive is outside calibrated shooter range");
             elevation = Math.atan((speedSquared + Math.sqrt(discriminant)) / (386.09 * horizontal));
+            ${config.shootWhileMoving?`double vertical = ${n(config.shotSpeed)} * Math.sin(elevation);
+            double riseFromMuzzle = hiveTargetHeight() - 18 - ${n(config.size*.42)} * Math.sin(elevation);
+            double flight = (vertical + Math.sqrt(Math.max(0, vertical * vertical - 2 * 386.09 * riseFromMuzzle))) / 386.09;
+            dx = hiveTargetX() - robot.x() - robotFieldVelocityX() * flight;
+            dy = hiveTargetY() - robot.y() - robotFieldVelocityY() * flight;
+            range = Math.max(0.01, Math.hypot(dx, dy));
+            angle = Math.atan2(dy, dx) - robot.heading();
+            yaw = Math.atan2(Math.sin(angle), Math.cos(angle));`:''}
         }`: '// Manual launch elevation selected in Robot setup.'}
         setTurretTarget(yaw, elevation); // chassis-relative yaw and elevation in RADIANS
         updateTurretController();
-    }`)
+    }${config.shootWhileMoving?`
+
+    // Moving shots need measured FIELD-frame velocity in INCHES/SECOND.
+    // These hooks must use your tuned localizer; do not return a guessed speed.
+    private double robotFieldVelocityX() { throw new IllegalStateException("Wire measured field X velocity"); }
+    private double robotFieldVelocityY() { throw new IllegalStateException("Wire measured field Y velocity"); }
+    `:''}`)
   if (actions.some(action => action.type === 'intake' && action.composition === 'deadline')) commandsMethods.push(`    private Command intakeUntilCancelled() {\n        return Command.build()\n            .setStart(this::startIntake)\n            .setDone(() -> false) // the following path is the deadline\n            .setEnd(reason -> stopIntake())\n            .requiring(intakeResource);\n    }`)
   const hooks = boundedTypes.filter(type => used.has(type)).map(type => {
     const suffix = type === 'shoot' ? 'Shooter' : type === 'transfer' ? 'Transfer' : 'FlowerIntake'

@@ -95,3 +95,10 @@ test('hive support intersections export a separate fail-fast clearance guard',()
   assert.match(code,/routeClearsSupports = false/);assert.match(code,/if \(!routeClearsSupports\) throw/)
   assert.match(code,/hive pillar/)
 })
+test('moving-shot capability exports Ivy parallel drive and calibrated velocity hooks',()=>{
+  const points=[node(85,20),node(115,20)];points[0].action={type:'shoot'}
+  const code=generateJava(points,analyzePath(points),{...defaultConfig,shootWhileMoving:true})
+  assert.match(code,/parallel\(followPath\(path0\(\)\), shootCommand\(\)\)/)
+  assert.match(code,/robotFieldVelocityX\(\) \* flight/)
+  assert.match(code,/Wire measured field X velocity/)
+})

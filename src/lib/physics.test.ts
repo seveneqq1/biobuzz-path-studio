@@ -9,6 +9,11 @@ import { clearsWalls, sweepWalls, wallExtent } from './walls'
 import { bounceOffSupports, robotSupportCollision, segmentBoxDistance, sweepSupports } from './supportCollisions'
 import { frameSolids, templateClearanceHeight } from './fieldGeometry'
 import { airborneShots, followCameraFrame, shootingCameraActive, smoothCameraBlend } from './followCamera'
+import { nearestSafePose, bufferedPoseSafe } from './safeSpot'
+import { previewKeyDelta, turnPreviewPose } from './previewHeading'
+import { scoreAuto } from './scoring'
+import { gamePieceFactory, pieceHoleDirections } from './sceneModels'
+import { analyzePath } from './optimizer'
 
 const node=(x:number,y:number):Waypoint=>({x,y,id:crypto.randomUUID(),heading:0,interpolation:'auto',controlWeight:1})
 const sample=(points:Waypoint[])=>points.slice(0,-1).flatMap((p,i)=>{const {c1,c2}=controls(points,i);return Array.from({length:201},(_,j)=>cubic(p,c1,c2,points[i+1],j/200))})
@@ -289,4 +294,77 @@ test('the demo route clears the shared wall/support geometry',()=>{
   const route=profile(seedWaypoints(),defaultConfig)
   assert.equal(route.wallCollision,undefined);assert.equal(route.supportCollision,undefined)
   assert.ok(templateClearanceHeight(16)>24)
+})
+test('safe snap preserves heading and adds one inch around walls and hive supports',()=>{
+  for(const pose of [{x:1,y:3,heading:45},{x:47.27,y:52.525,heading:0},{x:72,y:52.525,heading:30}]){
+    const snapped=nearestSafePose(pose,16)!
+    assert.ok(snapped);assert.equal(snapped.heading,pose.heading)
+    assert.ok(bufferedPoseSafe(snapped,16,1));assert.equal(robotSupportCollision(snapped,16),undefined)
+    assert.ok(clearsWalls(snapped,18));assert.deepEqual(nearestSafePose(snapped,16),snapped)
+  }
+  const wall=nearestSafePose({x:1,y:20,heading:0},16)!
+  assert.equal(wall.x,9);assert.equal(wall.y,20)
+})
+test('safe endpoints still flag an unsafe cubic between them',()=>{
+  const points=[node(15,20),node(15,125)]
+  points[0].curve={endId:points[1].id,c1:{x:-35,y:45},c2:{x:-35,y:100}}
+  assert.ok(points.every(p=>clearsWalls(p,16)&&!robotSupportCollision(p,16)))
+  const route=profile(points,defaultConfig);assert.deepEqual(route.unsafeSegments,[0]);assert.ok(route.wallCollision)
+})
+test('manual headings remain independent of path tangent and preserve geometry',()=>{
+  const points=[node(30,20),node(90,20),node(120,35)]
+  points[1].interpolation='tangent';points[2].interpolation='tangent'
+  const edited=editWaypoint(points,points[1].id,{heading:90}),route=profile(edited,defaultConfig)
+  assert.equal(edited[1].interpolation,'linear');assert.equal(edited[2].interpolation,'linear')
+  assert.deepEqual(controls(edited,0),controls(points,0))
+  assert.equal(route.samples.find(p=>p.node===1)!.heading,90)
+  assert.equal(analyzePath(edited.map(p=>({...p,interpolation:'auto' as const})))[0].type,'linear')
+})
+test('preview turns are clockwise/counterclockwise at configured rate and cannot clip',()=>{
+  assert.equal(previewKeyDelta('d',.5,180),-90);assert.equal(previewKeyDelta('ArrowLeft',.5,180),90)
+  assert.equal(previewKeyDelta('w',0,180),-90);assert.equal(previewKeyDelta('s',0,180),90)
+  const free=turnPreviewPose({x:20,y:20,heading:0},-90,16);assert.equal(free.pose.heading,270);assert.equal(free.blocked,false)
+  const wall=turnPreviewPose({x:8.5,y:30,heading:0},90,16);assert.ok(wall.blocked);assert.ok(clearsWalls(wall.pose,16))
+})
+test('moving-shot toggle overlaps drive, inherits measured velocity and joins before the next command',()=>{
+  const points=[node(85,20),node(110,20),node(120,20)];points[0].action={type:'shoot'};points[1].action={type:'wait',durationMs:700}
+  const config={...defaultConfig,shootWhileMoving:true},route=profile(points,config),s=resetSimulation(points,config)
+  let firedWhileMoving=false,joined=false
+  for(let i=0;i<1800&&!s.finished;i++){
+    const before=s.balls.length;stepSimulation(s,points,config,route,1/120)
+    if(s.balls.length>before&&s.shooting&&Math.abs(s.driveVx)>1){firedWhileMoving=true;assert.ok(s.x>85)}
+    if(s.processed.includes(1)){assert.equal(s.shooting,false);assert.equal(s.inventory,0);joined=true}
+  }
+  assert.ok(firedWhileMoving);assert.ok(joined);assert.ok(s.finished)
+  assert.equal(route.actions[0]?.composition,'parallel');assert.equal(profile(points,defaultConfig).actions[0]?.composition,undefined)
+})
+test('AUTO scoreboard separates official points from flower/cell/garden end-state potential',()=>{
+  const config=defaultConfig,s=resetSimulation([node(18,18),node(19,18)],config)
+  s.hives[0].tips=2;s.leftWall=true;s.travelled=1;s.x=12;s.y=9
+  s.balls.push({id:100,kind:'nectar',color:'red',x:48,y:141,z:15,vx:0,vy:0,vz:0})
+  const [red,blue]=scoreAuto(s,config)
+  assert.equal(red.total,48);assert.equal(red.park,1);assert.equal(red.flower,1);assert.equal(red.bottomNectar,1)
+  assert.equal(red.potential,6+4+2+5);assert.equal(blue.total,0)
+  assert.equal(red.total,red.tips*20+red.leave*3+red.park*5)
+  s.y=8;assert.equal(scoreAuto(s,config)[0].leave,0,'LEAVE is assessed at the end pose, not latched from a prior visit')
+})
+test('AUTO time limit prevents commands beyond 30 seconds',()=>{
+  const points=[node(20,20),node(100,20)];points[0].action={type:'wait',durationMs:40000};points[1].action={type:'shoot'}
+  const s=resetSimulation(points,defaultConfig),route=profile(points,defaultConfig)
+  for(let i=0;i<4000&&!s.finished;i++)stepSimulation(s,points,defaultConfig,route,1/120)
+  assert.ok(s.finished&&s.autoTimedOut);assert.equal(s.time,30);assert.equal(s.x,20);assert.equal(s.inventory,4);assert.ok(!s.processed.includes(1))
+})
+test('stationary chassis contacts do not inject speed on every tick',()=>{
+  const points=[node(20,20),node(30,20)];points[0].action={type:'wait',durationMs:5000}
+  const s=resetSimulation(points,defaultConfig),route=profile(points,defaultConfig)
+  s.balls.push({id:100,kind:'pollen',x:28.5,y:20,z:1.4,vx:0,vy:0,vz:0})
+  for(let i=0;i<120;i++)stepSimulation(s,points,defaultConfig,route,1/120)
+  const ball=s.balls.find(b=>b.id===100)!;assert.equal(ball.vx,0);assert.equal(ball.vy,0);assert.ok(ball.x>=29.4-1e-8)
+})
+test('game pieces use reusable hollow plastic shells with rounded circular lips',()=>{
+  const factory=gamePieceFactory(),pollen=factory('pollen'),nectar=factory('nectar','blue')
+  assert.equal(pollen.children.length,3);assert.equal(nectar.scale.x,1.8);assert.equal(pieceHoleDirections().length,20)
+  const material=(nectar.children[0] as import('three').Mesh).material as import('three').MeshStandardMaterial
+  assert.equal(material.metalness,0);assert.ok(material.roughness>.4)
+  factory.dispose()
 })

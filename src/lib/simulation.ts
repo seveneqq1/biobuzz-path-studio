@@ -5,7 +5,7 @@ import { analyzePath } from './optimizer'
 import { addCellPiece, advanceHive, cellOpening, createHive, GRAVITY, HIVE, hiveToLocal, pieceMass, pieceRadius } from './hivePhysics'
 import type { Hive } from './hivePhysics'
 import type { CellPiece } from './hivePhysics'
-import { compileRoute, nextPathEnd } from './route'
+import { compileRoute, nextPathEnd, routeActions } from './route'
 import { clearsWalls, constrainPose, sweepWalls } from './walls'
 import type { RobotPose } from './walls'
 import { bounceOffSupports, constrainSupports, robotSupportCollision, sweepSupports } from './supportCollisions'
@@ -17,12 +17,14 @@ export interface RobotConfig {
   size:number; turnRate:number; capacity:number; preload:number; shotSpeed:number; shotAngle:number; shotInterval:number; transferTime:number
   alliance:'red'|'blue'
   autoAim:boolean; turretRate:number; intakeMaterial:'gecko'|'silicone'
+  shootWhileMoving:boolean
 }
-export const defaultConfig: RobotConfig={rpm:312,wheel:3.78,gearing:1,mass:12,force:65,grip:.8,efficiency:.75,size:16,turnRate:180,capacity:8,preload:4,shotSpeed:240,shotAngle:55,shotInterval:.45,transferTime:.6,alliance:'red',autoAim:true,turretRate:240,intakeMaterial:'gecko'}
-export interface RouteSample extends Point2D {heading:number; s:number; time:number; node?:number}
+export const defaultConfig: RobotConfig={rpm:312,wheel:3.78,gearing:1,mass:12,force:65,grip:.8,efficiency:.75,size:16,turnRate:180,capacity:8,preload:4,shotSpeed:240,shotAngle:55,shotInterval:.45,transferTime:.6,alliance:'red',autoAim:true,turretRate:240,intakeMaterial:'gecko',shootWhileMoving:false}
+export interface RouteSample extends Point2D {heading:number; s:number; time:number; node?:number; segment:number}
 export function profile(points:Waypoint[],config:RobotConfig) {
   const samples:RouteSample[]=[]
   const decisions=analyzePath(points)
+  const actions=routeActions(points,config.shootWhileMoving)
   for(let i=0;i<points.length-1;i++) {
     const {c1,c2}=controls(points,i)
     const arc=curveArc(points[i],c1,c2,points[i+1]),joinT=arc.parameterAt(.68)
@@ -39,13 +41,13 @@ export function profile(points:Waypoint[],config:RobotConfig) {
         heading=progress<.68 ? tangent : joinHeading+shortestAngle(joinHeading,points[i+1].heading)*(progress-.68)/.32
       }
       const prev=samples.at(-1)
-      samples.push({...p,heading,s:(prev?.s??0)+(prev?distance(prev,p):0),time:0,...(j===80?{node:i+1}:i===0&&j===0?{node:0}:{})})
+      samples.push({...p,heading,segment:i,s:(prev?.s??0)+(prev?distance(prev,p):0),time:0,...(j===80?{node:i+1}:i===0&&j===0?{node:0}:{})})
     }
   }
   const maxSpeed=config.rpm/config.gearing*Math.PI*config.wheel/60*config.efficiency
   const acceleration=Math.min(config.force/config.mass,config.grip*9.81)*39.3701
   const speeds=samples.map((sample,i)=>{
-    if(i===0 || i===samples.length-1 || sample.node!==undefined && points[sample.node].action) return 0
+    if(i===0 || i===samples.length-1 || sample.node!==undefined && actions[sample.node] && (!actions[sample.node]!.composition||actions[sample.node]!.composition==='sequential')) return 0
     const prev=samples[i-1],next=samples[i+1],ds=distance(prev,next)
     const bend=Math.abs(shortestAngle(tangentDegrees(prev,sample),tangentDegrees(sample,next)))*Math.PI/180
     const lateral=Math.sqrt(acceleration*Math.max(ds/2,.01)/Math.max(bend,.0001))
@@ -58,7 +60,7 @@ export function profile(points:Waypoint[],config:RobotConfig) {
   const drive=samples.at(-1)?.time??0
   const nodeTime=(node:number)=>samples.find(s=>s.node===node)?.time??0
   let min=0,max=0
-  for(const step of compileRoute(points)) {
+  for(const step of compileRoute(points,config.shootWhileMoving)) {
     if(step.kind==='path'){const time=nodeTime(step.endIndex)-nodeTime(step.startIndex);min+=time;max+=time;continue}
     const action=step.action
     const fixed=action.type==='wait'?(action.durationMs??100)/1000:action.type==='transfer'?config.transferTime:action.type==='flowerIntake'?1:0
@@ -73,21 +75,28 @@ export function profile(points:Waypoint[],config:RobotConfig) {
   }
   let wallCollision:RouteSample|undefined
   let supportCollision:{sample:RouteSample;name:string}|undefined
+  const unsafeSegments=new Set<number>()
   let previous:RobotPose|undefined=points[0]
   for(const sample of samples){
     if(previous){
-      if(!wallCollision&&sweepWalls(previous,sample,config.size).hit)wallCollision=sample
-      if(!supportCollision){const contact=sweepSupports(previous,sample,config.size);if(contact.solid)supportCollision={sample,name:contact.solid.name}}
+      // Profiling needs a collision flag, not the expensive invalid-start
+      // projection used by playback. Dense obstructed strokes stay responsive.
+      const initial=robotSupportCollision(previous,config.size)
+      const wall=sweepWalls(previous,sample,config.size),support=initial?{solid:initial}:sweepSupports(previous,sample,config.size)
+      if(wall.hit||support.solid)unsafeSegments.add(sample.segment)
+      if(!wallCollision&&wall.hit)wallCollision=sample
+      if(!supportCollision&&support.solid)supportCollision={sample,name:support.solid.name}
     }
     previous=sample
   }
   const shotStops=points.flatMap((point,node)=>point.action?.type==='shoot'?[{node,time:nodeTime(node)}]:[])
-  return {samples,drive,min,max,maxSpeed,acceleration,wallCollision,supportCollision,shotStops}
+  return {samples,drive,min,max,maxSpeed,acceleration,wallCollision,supportCollision,shotStops,unsafeSegments:[...unsafeSegments],actions}
 }
 export interface Ball extends Point2D {id:number;vx:number;vy:number;z:number;vz:number;kind:'pollen'|'nectar';color?:'red'|'blue';flower?:number;released?:boolean;shot?:boolean}
 export interface SimState {x:number;y:number;heading:number;time:number;driveTime:number;index:number;inventory:number;hopper:CellPiece[];intake:boolean;balls:Ball[];hives:Hive[];action:string;remaining:number;shotClock:number;shooting:boolean;finished:boolean;warning:string;processed:number[];nextId:number;
   activeType?:string; timeout:number; concurrent?:{endNode:number;mode:'parallel'|'deadline'};
-  blocked:boolean;turretYaw:number;turretElevation:number;turretReady:boolean;feeder:{piece:CellPiece;remaining:number}[] }
+  blocked:boolean;turretYaw:number;turretElevation:number;turretReady:boolean;feeder:{piece:CellPiece;remaining:number}[];
+  driveVx:number;driveVy:number;travelled:number;leftWall:boolean;autoTimedOut:boolean }
 // Asset orientation: blue alliance at top, red at bottom; no rotation is applied.
 export const flowers=[{x:48,y:141},{x:141,y:96},{x:96,y:3},{x:3,y:48}]
 export const hiveCenters=[{x:72,y:59.25},{x:72,y:84.75}]
@@ -98,25 +107,32 @@ export function resetSimulation(points:Waypoint[],config:RobotConfig):SimState {
   flowers.forEach((f,i)=>{for(let j=0;j<4;j++)add(f.x,f.y,i,1.4+j*2.8)})
   const hopper=Array.from({length:Math.floor(Math.min(config.capacity,config.preload))},()=>({kind:'pollen' as const}))
   const start={x:points[0]?.x??18,y:points[0]?.y??18,heading:points[0]?.heading??0},wallBlocked=!clearsWalls(start,config.size),support=robotSupportCollision(start,config.size),blocked=wallBlocked||!!support
-  return {...constrainSupports(constrainPose(start,config.size),config.size),time:0,driveTime:0,index:0,inventory:hopper.length,hopper,intake:false,balls,hives:[createHive(1,'red'),createHive(0,'blue')],action:blocked?'Blocked':'Ready',remaining:0,shotClock:0,shooting:false,finished:false,warning:wallBlocked?'Start footprint intersects a wall. Move the start inward, then reset.':support?`Start overlaps ${support.name}. Move the start clear, then reset.`:'',processed:[],nextId:24,timeout:Infinity,blocked,turretYaw:start.heading,turretElevation:config.shotAngle,turretReady:false,feeder:[]}
+  return {...constrainSupports(constrainPose(start,config.size),config.size),time:0,driveTime:0,index:0,inventory:hopper.length,hopper,intake:false,balls,hives:[createHive(1,'red'),createHive(0,'blue')],action:blocked?'Blocked':'Ready',remaining:0,shotClock:0,shooting:false,finished:false,warning:wallBlocked?'Start footprint intersects a wall. Move the start inward, then reset.':support?`Start overlaps ${support.name}. Move the start clear, then reset.`:'',processed:[],nextId:24,timeout:Infinity,blocked,turretYaw:start.heading,turretElevation:config.shotAngle,turretReady:false,feeder:[],driveVx:0,driveVy:0,travelled:0,leftWall:false,autoTimedOut:false}
 }
-export function turretSolution(s:Pick<SimState,'x'|'y'|'hives'>,config:RobotConfig) {
+export function turretSolution(s:Pick<SimState,'x'|'y'|'hives'>&Partial<Pick<SimState,'driveVx'|'driveVy'>>,config:RobotConfig) {
   const index=config.alliance==='red'?0:1,opening=cellOpening(s.hives[index],s.hives[index].side)
-  const target={x:hiveCenters[index].x+opening.x,y:hiveCenters[index].y},yaw=Math.atan2(target.y-s.y,target.x-s.x)
-  const length=config.size*.42,range=Math.max(.01,distance(s,target)),v2=config.shotSpeed**2
+  const target={x:hiveCenters[index].x+opening.x,y:hiveCenters[index].y}
+  let yaw=Math.atan2(target.y-s.y,target.x-s.x),range=Math.max(.01,distance(s,target))
+  const length=config.size*.42,v2=config.shotSpeed**2
   let elevation=config.shotAngle*Math.PI/180,reachable=true
-  if(config.autoAim)for(let i=0;i<5;i++){
+  if(config.autoAim)for(let i=0;i<10;i++){
     const horizontal=Math.max(.01,range-length*Math.cos(elevation)),rise=opening.z-(18+length*Math.sin(elevation))
     const discriminant=v2*v2-GRAVITY*(GRAVITY*horizontal*horizontal+2*rise*v2)
     reachable=discriminant>=0
     if(!reachable)break
     elevation=Math.atan((v2+Math.sqrt(discriminant))/(GRAVITY*horizontal))
+    if(config.shootWhileMoving){
+      const vz=config.shotSpeed*Math.sin(elevation),d=vz*vz-2*GRAVITY*(opening.z-18-length*Math.sin(elevation))
+      const flight=(vz+Math.sqrt(Math.max(0,d)))/GRAVITY
+      const dx=target.x-s.x-(s.driveVx??0)*flight,dy=target.y-s.y-(s.driveVy??0)*flight
+      yaw=Math.atan2(dy,dx);range=Math.max(.01,Math.hypot(dx,dy))
+    }
   }
   return {yaw:yaw*180/Math.PI,elevation:elevation*180/Math.PI,reachable}
 }
 export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,route:ReturnType<typeof profile>,dt:number) {
   if(s.finished || s.blocked)return
-  s.time+=dt
+  dt=Math.min(dt,Math.max(0,30-s.time));s.time+=dt
   const current=route.samples[s.index]
   if(!current){s.finished=true;return}
   const busy=()=>s.shooting||s.remaining>0||s.activeType==='transfer'&&s.feeder.length>0||s.activeType==='intake'&&s.concurrent?.mode==='deadline'
@@ -128,7 +144,7 @@ export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,r
   }
   if(!s.concurrent && !busy() && current.node!==undefined && !s.processed.includes(current.node)) {
     s.processed.push(current.node)
-    const action=points[current.node].action
+    const action=route.actions[current.node]
     if(action){s.action=action.type;s.activeType=action.type;s.timeout=action.timeoutMs && action.type!=='intake'&&action.type!=='wait'?action.timeoutMs/1000:Infinity
       s.remaining=action.type==='wait'?(action.durationMs??100)/1000:action.type==='transfer'?config.transferTime:action.type==='flowerIntake'?1:0
       if(action.composition && action.composition!=='sequential' && current.node<points.length-1)s.concurrent={mode:action.composition,endNode:nextPathEnd(points,current.node)}
@@ -153,7 +169,7 @@ export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,r
     if(s.hopper.length>0 && s.shotClock<=0 && s.turretReady){
       const angle=s.turretYaw*Math.PI/180,elevation=s.turretElevation*Math.PI/180,length=config.size*.42
       const piece=s.hopper.shift()!
-      s.balls.push({...piece,id:s.nextId++,shot:true,x:s.x+Math.cos(angle)*length*Math.cos(elevation),y:s.y+Math.sin(angle)*length*Math.cos(elevation),z:18+length*Math.sin(elevation),vx:Math.cos(angle)*config.shotSpeed*Math.cos(elevation),vy:Math.sin(angle)*config.shotSpeed*Math.cos(elevation),vz:config.shotSpeed*Math.sin(elevation)})
+      s.balls.push({...piece,id:s.nextId++,shot:true,x:s.x+Math.cos(angle)*length*Math.cos(elevation),y:s.y+Math.sin(angle)*length*Math.cos(elevation),z:18+length*Math.sin(elevation),vx:Math.cos(angle)*config.shotSpeed*Math.cos(elevation)+(config.shootWhileMoving?s.driveVx:0),vy:Math.sin(angle)*config.shotSpeed*Math.cos(elevation)+(config.shootWhileMoving?s.driveVy:0),vz:config.shotSpeed*Math.sin(elevation)})
       s.inventory=s.hopper.length+s.feeder.length;s.shotClock=config.shotInterval
     }
     if(s.inventory===0 && !s.balls.some(b=>b.z>pieceRadius(b.kind)+.2 && b.flower===undefined) && !s.hives.some(h=>h.tipping||h.spilling!==null))endAction()
@@ -184,9 +200,11 @@ export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,r
       if('solid' in contact?contact.solid:contact.hit){s.driveTime=previousTime+(next.time-previousTime)*contact.fraction;s.index=oldIndex;s.blocked=true;s.finished=false;s.intake=false;endAction();s.concurrent=undefined;s.action='Blocked';s.warning='solid' in contact?`${contact.solid?.name} contact: route stopped. Move the route clear and reset.`:'Wall contact: route stopped. Move the route inward and reset.';return}
       previous=next;previousTime=next.time
     }
+    s.driveVx=(s.x-old.x)/dt;s.driveVy=(s.y-old.y)/dt;s.travelled+=distance(old,s)
+    if(s.travelled>.05&&clearsWalls(s,config.size+.02))s.leftWall=true
     s.turretYaw+=shortestAngle(old.heading,s.heading) // chassis motion carries the turret; motor counter-tracks next tick
     if(s.index===route.samples.length-1 && !busy() && !s.concurrent && !(a.node!==undefined && points[a.node].action && !s.processed.includes(a.node)) && !s.balls.some(ball=>ball.flower===undefined && ball.z>pieceRadius(ball.kind)+.2) && !s.hives.some(h=>h.tipping || h.spilling!==null)){s.finished=true;s.intake=false}
-  }
+  } else {s.driveVx=0;s.driveVy=0}
   const remove=new Set<number>()
   for(const ball of s.balls){
     if(ball.flower!==undefined)continue
@@ -232,7 +250,9 @@ export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,r
       let surfaceF=f,surfaceL=l
       if(d<1e-6){if(half-Math.abs(forward)<half-Math.abs(lateral)){nx=Math.sign(forward)||1;ny=0;surfaceF=nx*half}else{nx=0;ny=Math.sign(lateral)||1;surfaceL=ny*half}d=1}
       if(d<r || Math.abs(forward)<=half&&Math.abs(lateral)<=half){nx/=d;ny/=d;const wx=nx*Math.cos(h)-ny*Math.sin(h),wy=nx*Math.sin(h)+ny*Math.cos(h)
-        ball.x=s.x+(surfaceF+nx*r)*Math.cos(h)-(surfaceL+ny*r)*Math.sin(h);ball.y=s.y+(surfaceF+nx*r)*Math.sin(h)+(surfaceL+ny*r)*Math.cos(h);ball.vx+=wx*15;ball.vy+=wy*15}
+        ball.x=s.x+(surfaceF+nx*r)*Math.cos(h)-(surfaceL+ny*r)*Math.sin(h);ball.y=s.y+(surfaceF+nx*r)*Math.sin(h)+(surfaceL+ny*r)*Math.cos(h)
+        const closing=(ball.vx-s.driveVx)*wx+(ball.vy-s.driveVy)*wy
+        if(closing<0){ball.vx-=1.35*closing*wx;ball.vy-=1.35*closing*wy}}
     }
   }
   s.balls=s.balls.filter(b=>!remove.has(b.id))
@@ -258,4 +278,5 @@ export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,r
   })
   const half=config.size/2
   s.warning=!aim.reachable&&s.shooting?'Launch speed cannot reach the cell; manual-angle shots may miss':Math.abs(s.x-72)<23+half && Math.abs(s.y-72)<19+half?'HIVE envelope overlap: check height and frame clearance':''
+  if(s.time>=30&&!s.finished){s.finished=true;s.autoTimedOut=true;s.intake=false;s.shooting=false;s.activeType=undefined;s.concurrent=undefined;s.driveVx=0;s.driveVy=0;s.warning='30-second AUTO limit reached. Later actions were not run; transition settling is not modeled.'}
 }

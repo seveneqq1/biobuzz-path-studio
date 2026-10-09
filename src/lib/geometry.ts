@@ -47,10 +47,13 @@ export function controls(points: Waypoint[], index: number) {
 export function editWaypoint(points: Waypoint[], id: string, changes: Partial<Waypoint>) {
   const old=points.find(p=>p.id===id)
   if(!old)return points
-  const next={...old,...changes},dx=next.x-old.x,dy=next.y-old.y
+  const next={...old,...changes,...(changes.heading!==undefined?{headingLocked:true}:{})},dx=next.x-old.x,dy=next.y-old.y
   const ratio=next.controlWeight/old.controlWeight
-  return points.map(point=>{
-    const updated=point.id===id?next:point
+  const index=points.findIndex(p=>p.id===id)
+  return points.map((point,i)=>{
+    let updated=point.id===id?next:point
+    // An explicit heading edit must survive automatic tangent selection.
+    if(changes.heading!==undefined && (i===index&&i>0 || i===index+1))updated={...updated,interpolation:'linear'}
     if(!point.curve || point.curve.endId!==id && point.id!==id)return updated
     const move=(handle:Point2D)=>({x:next.x+(handle.x-old.x)*ratio,y:next.y+(handle.y-old.y)*ratio})
     return {...updated,curve:{...point.curve,
