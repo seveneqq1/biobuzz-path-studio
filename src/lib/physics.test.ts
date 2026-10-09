@@ -5,6 +5,7 @@ import { controls, distance, editWaypoint } from './geometry'
 import { defaultConfig, profile, resetSimulation, stepSimulation } from './simulation'
 import type { Waypoint } from '../types'
 import { addCellPiece, advanceHive, cellOpening, createHive, HIVE, pieceMass } from './hivePhysics'
+import { clearsWalls, sweepWalls, wallExtent } from './walls'
 
 const node=(x:number,y:number):Waypoint=>({x,y,id:crypto.randomUUID(),heading:0,interpolation:'auto',controlWeight:1})
 const sample=(points:Waypoint[])=>points.slice(0,-1).flatMap((p,i)=>{const {c1,c2}=controls(points,i);return Array.from({length:201},(_,j)=>cubic(p,c1,c2,points[i+1],j/200))})
@@ -57,7 +58,7 @@ test('wait gates motion, intake collects balls, reset restores inventory',()=>{
   const s=resetSimulation(points,defaultConfig),route=profile(points,defaultConfig)
   for(let i=0;i<100;i++)stepSimulation(s,points,defaultConfig,route,1/120)
   assert.equal(s.x,20)
-  s.intake=true;s.balls.push({id:100,x:20,y:20,z:0,vx:0,vy:0,vz:0,kind:'pollen'})
+  s.intake=true;s.balls.push({id:100,x:28,y:20,z:1.4,vx:0,vy:0,vz:0,kind:'pollen'})
   stepSimulation(s,points,defaultConfig,route,1/120)
   assert.equal(s.inventory,5);assert.ok(!s.balls.some(b=>b.id===100))
   for(let i=0;i<1000;i++)stepSimulation(s,points,defaultConfig,route,1/120)
@@ -129,16 +130,72 @@ test('timeout race cancels shooting and allows the next path to proceed',()=>{
   const points=[node(85,20),node(115,20)];points[0].action={type:'shoot',timeoutMs:200}
   const s=resetSimulation(points,defaultConfig),route=profile(points,defaultConfig)
   for(let i=0;i<70;i++)stepSimulation(s,points,defaultConfig,route,1/120)
-  assert.ok(s.x>85);assert.equal(s.shooting,false);assert.equal(s.inventory,3)
+  assert.ok(s.x>85);assert.equal(s.shooting,false);assert.equal(s.inventory,4,'timeout occurs before turret alignment; no early shots')
 })
 test('intake and shooting preserve nectar kind and alliance color',()=>{
-  const points=[node(85,20),node(115,20)];points[0].action={type:'wait',durationMs:100}
+  const points=[node(85,20),node(115,20)];points[0].action={type:'wait',durationMs:1000}
   const config={...defaultConfig,preload:0},s=resetSimulation(points,config),route=profile(points,config)
-  s.intake=true;s.balls.push({id:100,x:85,y:20,z:1.8,vx:0,vy:0,vz:0,kind:'nectar',color:'blue'})
+  s.intake=true;s.balls.push({id:100,x:93,y:20,z:1.8,vx:0,vy:0,vz:0,kind:'nectar',color:'blue'})
   stepSimulation(s,points,config,route,1/120)
+  assert.deepEqual(s.feeder[0].piece,{kind:'nectar',color:'blue'});assert.equal(s.hopper.length,0)
+  for(let i=0;i<80;i++)stepSimulation(s,points,config,route,1/120)
   assert.deepEqual(s.hopper,[{kind:'nectar',color:'blue'}]);assert.equal(s.inventory,1)
   s.shooting=true;s.remaining=0;s.activeType='shoot'
   stepSimulation(s,points,config,route,1/120)
   const fired=s.balls.find(b=>b.id===24)!
   assert.equal(fired.kind,'nectar');assert.equal(fired.color,'blue');assert.equal(s.inventory,0)
+})
+
+test('turret aligns at its own rate and fires without rotating the chassis',()=>{
+  const points=[node(85,20),node(115,20)];points[0].action={type:'shoot'}
+  const config={...defaultConfig,turretRate:45},s=resetSimulation(points,config),route=profile(points,config)
+  for(let i=0;i<60;i++)stepSimulation(s,points,config,route,1/120)
+  assert.equal(s.heading,0);assert.equal(s.inventory,4);assert.ok(s.turretYaw>20 && s.turretYaw<24)
+  for(let i=0;i<300;i++)stepSimulation(s,points,config,route,1/120)
+  assert.equal(s.heading,0);assert.ok(s.inventory<4)
+})
+test('only the front wheel intake collects, and transfer drains the sensor-indexed queue',()=>{
+  const points=[node(30,30),node(100,30)];points[0].heading=90;points[1].heading=90;points[1].interpolation='constant';points[0].action={type:'transfer'}
+  const config={...defaultConfig,preload:0},s=resetSimulation(points,config),route=profile(points,config)
+  s.intake=true
+  for(const [id,x,y] of [[100,30,38],[101,38,30],[102,30,22]])s.balls.push({id,x,y,z:1.4,vx:0,vy:0,vz:0,kind:'pollen'})
+  stepSimulation(s,points,config,route,1/120)
+  assert.equal(s.inventory,1);assert.equal(s.feeder.length,1);assert.equal(s.hopper.length,0)
+  for(let i=0;i<60;i++)stepSimulation(s,points,config,route,1/120)
+  assert.equal(s.x,30);assert.equal(s.feeder.length,1)
+  for(let i=0;i<30;i++)stepSimulation(s,points,config,route,1/120)
+  assert.equal(s.feeder.length,0);assert.equal(s.hopper.length,1);assert.ok(s.x>30)
+})
+test('rotating square sweeps catch a wall even when both endpoint poses are safe',()=>{
+  assert.equal(wallExtent(0,16),8)
+  const start={x:10,y:40,heading:0},end={...start,heading:90},contact=sweepWalls(start,end,16)
+  assert.ok(clearsWalls(start,16) && clearsWalls(end,16));assert.ok(contact.hit)
+  assert.ok(contact.fraction>0 && contact.fraction<.5);assert.ok(clearsWalls(contact.pose,16))
+})
+test('wall contact stops motion, never clips, and never executes the action past the wall',()=>{
+  const points=[node(25,25),node(142,25)];points[1].action={type:'shoot'}
+  const s=resetSimulation(points,defaultConfig),route=profile(points,defaultConfig)
+  assert.ok(route.wallCollision)
+  for(let i=0;i<1500;i++){stepSimulation(s,points,defaultConfig,route,1/120);assert.ok(clearsWalls(s,16))}
+  assert.ok(s.blocked);assert.equal(s.finished,false);assert.ok(s.x<=136);assert.ok(s.x>135.9)
+  assert.equal(s.inventory,4);assert.ok(!s.processed.includes(1));assert.match(s.warning,/Wall contact/)
+  const time=s.time;stepSimulation(s,points,defaultConfig,route,1);assert.equal(s.time,time)
+})
+test('unsafe starts are constrained and blocked before play, including angled corners',()=>{
+  const points=[node(2,2),node(100,20)];points[0].heading=45
+  const s=resetSimulation(points,defaultConfig)
+  assert.ok(s.blocked);assert.ok(clearsWalls(s,16));assert.ok(s.x>11 && s.y>11)
+})
+test('a large timestep cannot jump over an outward-curving wall collision',()=>{
+  const points=[node(110,40),node(110,100)]
+  points[0].curve={endId:points[1].id,c1:{x:170,y:50},c2:{x:170,y:90}}
+  const s=resetSimulation(points,defaultConfig),route=profile(points,defaultConfig)
+  stepSimulation(s,points,defaultConfig,route,100)
+  assert.ok(s.blocked);assert.ok(clearsWalls(s,16));assert.equal(s.finished,false)
+})
+test('precise S-shaped fitting retains both lobes and commands without increasing point count',()=>{
+  const points=Array.from({length:61},(_,i)=>node(20+i*1.6,72+22*Math.sin(i*Math.PI/30)))
+  const reduced=optimizeCurves(points,.1),a=sample(points),b=sample(reduced)
+  assert.ok(reduced.length<12);assert.ok(reduced.length<points.length)
+  for(const [source,target] of [[a,b],[b,a]])assert.ok(Math.max(...source.map(p=>Math.min(...target.map(q=>distance(p,q)))))<.35)
 })

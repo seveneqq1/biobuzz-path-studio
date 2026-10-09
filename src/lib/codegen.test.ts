@@ -4,6 +4,7 @@ import type { Waypoint } from '../types'
 import { generateJava } from './codegen'
 import { analyzePath } from './optimizer'
 import { compileRoute } from './route'
+import { defaultConfig } from './simulation'
 
 const node=(x:number,y:number):Waypoint=>({x,y,id:crypto.randomUUID(),heading:0,interpolation:'auto',controlWeight:1})
 const exportCode=(points:Waypoint[])=>generateJava(points,analyzePath(points))
@@ -68,4 +69,24 @@ test('collinear handles that reverse direction are not incorrectly exported as a
   const code=exportCode(points)
   assert.match(code,/Paths\.curve\(startPose,/)
   assert.doesNotMatch(code,/Paths\.line\(startPose,/)
+})
+test('SANA turret export aims independently, gates the feeder, and uses separate Ivy requirements',()=>{
+  const points=[node(85,20),node(115,20)];points[0].action={type:'shoot'}
+  const code=exportCode(points)
+  assert.match(code,/public class SanaAuto/);assert.match(code,/aimTurretCommand\(\),/)
+  assert.match(code,/trackTurretCommand\(\)/);assert.match(code,/Pose robot = follower\.pose\(\)/)
+  assert.match(code,/Math\.atan2\(dy, dx\) - robot\.heading\(\)/)
+  assert.match(code,/isTurretAtTarget\(\) && isShooterAtSpeed\(\)/)
+  assert.match(code,/\.requiring\(turretResource\)/);assert.match(code,/stopTurret\(\)/)
+  assert.doesNotMatch(code,/follower\.setHeading/)
+})
+test('unsafe routes export a fail-fast wall clearance guard',()=>{
+  const code=exportCode([node(20,20),node(142,20)])
+  assert.match(code,/routeClearsWalls = false/);assert.match(code,/if \(!routeClearsWalls\) throw/)
+})
+test('robot setup alliance, manual pitch and intake template propagate to Java',()=>{
+  const points=[node(40,20),node(100,20)];points[0].action={type:'shoot'}
+  const code=generateJava(points,analyzePath(points),{...defaultConfig,alliance:'blue',autoAim:false,shotAngle:62,intakeMaterial:'silicone'})
+  assert.match(code,/silicone wheel stacks/);assert.match(code,/hiveTargetY\(\) \{ return 84\.75/)
+  assert.match(code,/double elevation = Math\.toRadians\(62\)/);assert.doesNotMatch(code,/double discriminant/)
 })

@@ -3,12 +3,12 @@ import { Circle, Group, Image, Line, Rect, Text } from 'react-konva'
 import { Box, Map, Pause, Play, RotateCcw, Settings2, X } from 'lucide-react'
 import type { Waypoint } from '../types'
 import { worldToCanvas } from '../lib/geometry'
-import { defaultConfig, flowers, hiveCenters, profile, resetSimulation, stepSimulation } from '../lib/simulation'
+import { flowers, hiveCenters, profile, resetSimulation, stepSimulation } from '../lib/simulation'
 import type { RobotConfig } from '../lib/simulation'
 import { cellOpening, pieceRadius } from '../lib/hivePhysics'
 import { ThreePreview } from './ThreePreview'
 
-const fields: {key:Exclude<keyof RobotConfig,'alliance'|'autoAim'>;label:string;min:number;max:number;step:number}[]=[
+const fields: {key:Exclude<keyof RobotConfig,'alliance'|'autoAim'|'intakeMaterial'>;label:string;min:number;max:number;step:number}[]=[
   {key:'rpm',label:'Motor output RPM',min:1,max:6000,step:1},
   {key:'wheel',label:'Wheel diameter (in)',min:1,max:8,step:.1},
   {key:'gearing',label:'Motor : wheel ratio',min:.1,max:20,step:.1},
@@ -16,7 +16,7 @@ const fields: {key:Exclude<keyof RobotConfig,'alliance'|'autoAim'>;label:string;
   {key:'force',label:'Drive force (N)',min:1,max:500,step:1},
   {key:'grip',label:'Traction coefficient',min:.1,max:2,step:.05},
   {key:'efficiency',label:'Loaded speed factor',min:.1,max:1,step:.05},
-  {key:'size',label:'Robot footprint (in)',min:6,max:24,step:1},
+  {key:'size',label:'Robot footprint (in)',min:12,max:24,step:1},
   {key:'turnRate',label:'Max rotation (°/s)',min:10,max:720,step:10},
   {key:'preload',label:'Preloaded pollen',min:0,max:20,step:1},
   {key:'capacity',label:'Hopper capacity',min:1,max:20,step:1},
@@ -24,6 +24,7 @@ const fields: {key:Exclude<keyof RobotConfig,'alliance'|'autoAim'>;label:string;
   {key:'shotAngle',label:'Launch elevation (°)',min:10,max:85,step:1},
   {key:'shotInterval',label:'Seconds per shot',min:.1,max:5,step:.05},
   {key:'transferTime',label:'Transfer time (s)',min:.1,max:5,step:.1},
+  {key:'turretRate',label:'Turret rotation (°/s)',min:10,max:720,step:10},
 ]
 
 function robotPNG() {
@@ -40,11 +41,11 @@ function robotPNG() {
   return canvas.toDataURL('image/png')
 }
 
-export function useSimulation(points:Waypoint[]) {
+export function useSimulation(points:Waypoint[],config:RobotConfig,setConfig:(config:RobotConfig)=>void,theme:'light'|'dark') {
   const dock=useRef<HTMLDivElement>(null)
   const [enabled,setEnabled]=useState(false),[running,setRunning]=useState(false),[settings,setSettings]=useState(false)
   const [threeD,setThreeD]=useState(false)
-  const [config,setConfig]=useState(defaultConfig),[speed,setSpeed]=useState(1)
+  const [speed,setSpeed]=useState(1)
   const route=useMemo(()=>profile(points,config),[points,config])
   const engine=useRef(resetSimulation(points,config))
   const [view,setView]=useState(()=>resetSimulation(points,config))
@@ -71,7 +72,7 @@ export function useSimulation(points:Waypoint[]) {
       last=now
       while(accumulator>=1/120){stepSimulation(engine.current,points,config,route,1/120);accumulator-=1/120}
       setView(structuredClone(engine.current))
-      if(engine.current.finished){setRunning(false);return}
+      if(engine.current.finished || engine.current.blocked){setRunning(false);return}
       frame=requestAnimationFrame(tick)
     }
     frame=requestAnimationFrame(tick)
@@ -91,29 +92,32 @@ export function useSimulation(points:Waypoint[]) {
         <button aria-pressed={!threeD} onClick={plan}><Map size={16}/>Plan 2D</button>
         <button aria-pressed={threeD} onClick={()=>{setThreeD(true);setEnabled(true)}}><Box size={16}/>Preview 3D</button>
       </div>
-      <div className="runtime-estimate" title="Drive time plus inventory-dependent shooting delays"><span>Estimated run</span><strong>{route.min.toFixed(1)}{route.max>route.min?`–${route.max.toFixed(1)}`:''}<small> s</small></strong></div>
+      <div className="runtime-estimate" title="Drive time plus inventory-dependent shooting delays"><span>{route.wallCollision?'Wall clearance':'Estimated run'}</span><strong>{route.wallCollision?'Unsafe route':<>{route.min.toFixed(1)}{route.max>route.min?`–${route.max.toFixed(1)}`:''}<small> s</small></>}</strong></div>
       <div className="playback-controls">
         <button className="robot-setup-button" aria-label="Robot configuration" onClick={()=>setSettings(!settings)}><Settings2 size={16}/><span>Robot setup</span></button>
         <select aria-label="Playback speed" value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value={.5}>0.5×</option><option value={1}>1×</option><option value={2}>2×</option></select>
         <button className="reset-playback" onClick={reset} aria-label="Reset simulation"><RotateCcw size={15}/></button>
-        <button className="run-button" disabled={points.length<2} onClick={play} aria-label={running?'Pause simulation':'Play simulation'}>{running?<Pause size={16}/>:<Play size={16}/>}<span>{running?'Pause':view.finished?'Replay':'Run in 3D'}</span></button>
+        <button className="run-button" disabled={points.length<2||view.blocked} onClick={play} aria-label={running?'Pause simulation':'Play simulation'}>{running?<Pause size={16}/>:<Play size={16}/>}<span>{view.blocked?'Wall contact':running?'Pause':view.finished?'Replay':'Run in 3D'}</span></button>
       </div>
     </div>
     {enabled && <div className="simulation-status" aria-live="off">
-      <span className="time-chip">{view.time.toFixed(1)} / 30 s</span><span className="action-status">{view.finished?'Finished':running?view.action==='Drive'?'Driving':view.action:'Paused'}</span>
+      <span className="time-chip">{view.time.toFixed(1)} / 30 s</span><span className="action-status">{view.blocked?'Blocked':view.finished?'Finished':running?view.action==='Drive'?'Driving':view.action:'Paused'}</span>
       <span>Hopper <b>{view.inventory}/{config.capacity}</b></span>
+      <span>Indexer <b>{view.feeder.length}</b></span><span>Turret <b>{view.turretReady?'Aligned':'Aiming'}</b></span>
       <button aria-pressed={view.intake} onClick={()=>{engine.current.intake=!engine.current.intake;setView(structuredClone(engine.current))}}>Intake {view.intake?'on':'off'}</button>
       <span className="tip-count red">Red tips <b>{view.hives[0].tips}</b></span><span className="tip-count blue">Blue tips <b>{view.hives[1].tips}</b></span>
       {view.warning && <strong>{view.warning}</strong>}
     </div>}
+    {route.wallCollision && !view.blocked && <div className="route-safety" role="status">Wall clearance needed near ({route.wallCollision.x.toFixed(1)}, {route.wallCollision.y.toFixed(1)}). Your rotated {config.size}-inch robot will stop at contact.</div>}
     {settings && <div className="robot-settings">
       <h3>Robot setup <button aria-label="Close robot configuration" onClick={()=>setSettings(false)}><X size={17}/></button></h3>
       <p>Use measured drive force and loaded speed to calibrate timing. Changing these settings resets the run.</p>
       <label>Alliance<select value={config.alliance} onChange={e=>setConfig({...config,alliance:e.target.value as 'red'|'blue'})}><option value="red">Red</option><option value="blue">Blue</option></select></label>
+      <label>Intake wheels<select value={config.intakeMaterial} onChange={e=>setConfig({...config,intakeMaterial:e.target.value as RobotConfig['intakeMaterial']})}><option value="gecko">Gecko</option><option value="silicone">Silicone</option></select></label>
       <label><input type="checkbox" checked={config.autoAim} onChange={e=>setConfig({...config,autoAim:e.target.checked})}/> Automatically aim launch elevation at the raised cell</label>
       <div className="robot-config-grid">{fields.map(f=><label key={f.key}>{f.label}<input type="number" min={f.min} max={f.max} step={f.step} value={config[f.key]} onChange={e=>{const n=Number(e.target.value);if(Number.isFinite(n))setConfig({...config,[f.key]:Math.max(f.min,Math.min(f.max,n))})}}/></label>)}</div>
       <div className="model-summary"><span>Loaded speed <b>{route.maxSpeed.toFixed(1)} in/s</b></span><span>Acceleration <b>{route.acceleration.toFixed(1)} in/s²</b></span></div>
-      <p>Intake stays on; transfer pauses; shooting empties the hopper. Hive pieces retain their type and mass. A damped pivot spills them through the lower lip. Joint damping and contact restitution are approximations; frame-clearance warnings require robot validation.</p>
+      <p>Front wheel intake feeds a timed, single-file indexer. Transfer waits for queued pieces. The independent turret tracks the raised cell and gates shots on alignment without turning the chassis. Wall contact stops the route. This template has approximate contact/joint physics; validate frame clearance and mechanism timings on your robot.</p>
     </div>}
   </div>
   const overlay=enabled && !threeD && <Group>
@@ -136,6 +140,6 @@ export function useSimulation(points:Waypoint[]) {
       {view.intake && <Rect x={-config.size*2} y={-config.size*2.8} width={config.size*4} height={5} fill="#70efbd"/>}
     </Group>
   </Group>
-  const scene=threeD && <ThreePreview view={view} config={config} route={route} running={running} onBallMove={moveBall} onBack={plan}/>
+  const scene=threeD && <ThreePreview view={view} config={config} route={route} running={running} onBallMove={moveBall} onBack={plan} theme={theme}/>
   return {hud,overlay,scene,threeD}
 }

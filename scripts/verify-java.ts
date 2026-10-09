@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { generateJava } from '../src/lib/codegen'
 import { analyzePath } from '../src/lib/optimizer'
 import type { Waypoint } from '../src/types'
+import { defaultConfig } from '../src/lib/simulation'
 
 const root=await mkdtemp(join(tmpdir(),'biobuzz-java-'))
 const run=(command:string,args:string[])=>{
@@ -51,10 +52,10 @@ public class VerifyHeadings {
   public static void main(String[] args) throws Exception {
     PoseFactory p = PoseFactory.degrees();
     Curve curve = Paths.curve(p.of(0,0,0),p.of(0,70,0),p.of(15,100,0),p.of(100,100,0)).curve;
-    java.lang.reflect.Method method = BiobuzzAuto0.class.getDeclaredMethod("smoothPiecewise", double.class);
+    java.lang.reflect.Method method = SanaAuto0.class.getDeclaredMethod("smoothPiecewise", double.class);
     method.setAccessible(true);
     double target = Math.toRadians(250);
-    Interpolator heading = (Interpolator) method.invoke(new BiobuzzAuto0(), target);
+    Interpolator heading = (Interpolator) method.invoke(new SanaAuto0(), target);
     double join = curve.parameter(0.68), start = curve.tangent(join).theta();
     for(int i=0;i<=100;i++) {
       double t=i/100.0, progress=curve.pathCompletion(t);
@@ -79,8 +80,8 @@ for(let variant=0;variant<3;variant++){
   points[3].action={type:'flowerIntake',composition:'deadline'}
   points[4].action={type:'wait',durationMs:700}
   points[5].action={type:'shoot',composition:'parallel'}
-  const name=`BiobuzzAuto${variant}`
-  files[`${name}.java`]=generateJava(points,analyzePath(points)).replace('public class BiobuzzAuto ',`public class ${name} `)
+  const name=`SanaAuto${variant}`
+  files[`${name}.java`]=generateJava(points,analyzePath(points),{...defaultConfig,alliance:variant===2?'blue':'red',autoAim:variant!==2,intakeMaterial:variant===2?'silicone':'gecko'}).replace('public class SanaAuto ',`public class ${name} `)
 }
 for(const [name,text] of Object.entries(files))await writeFile(join(source,name),text)
 const classpath=['pedro-core.jar','ivy-core.jar','classes.jar'].map(name=>join(root,name)).join(delimiter)

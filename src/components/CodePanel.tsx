@@ -45,7 +45,7 @@ export function CodePanel({ code, onExport }: Props) {
   }
   return <section className="code-panel" aria-label="Generated Java code">
     <div className="code-header">
-      <div><Code2 size={16} /><span>BiobuzzAuto.java</span><small>Pedro 3 + Ivy</small></div>
+      <div><Code2 size={16} /><span>SanaAuto.java</span><small>Pedro 3 + Ivy</small></div>
       <div className="code-actions">
         <button onClick={copy}>{copied ? <Check size={15} /> : <Clipboard size={15} />}{copied ? 'Copied' : 'Copy'}</button>
         <button onClick={onExport}><Download size={15} />Export</button>

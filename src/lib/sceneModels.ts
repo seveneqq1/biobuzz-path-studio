@@ -59,19 +59,19 @@ export function gamePieceFactory(m:Mats) {
   }
 }
 
-export function buildField(scene:T.Scene,m:Mats) {
+export function buildField(scene:T.Scene,m:Mats,dark=false) {
   const root=new T.Group();scene.add(root)
-  const ground=new T.MeshStandardMaterial({color:0xd7dee1,roughness:.98})
+  const ground=new T.MeshStandardMaterial({color:dark?0x263640:0xd7dee1,roughness:.98})
   box(root,[800,2,800],[0,-3,0],ground)
   const tiles=[0x555c60,0x596165,0x535b60].map(color=>new T.MeshStandardMaterial({color,roughness:.96}))
   for(let x=0;x<6;x++)for(let y=0;y<6;y++)box(root,[23.94,.59,23.94],[-60+x*24,-.3,-60+y*24],tiles[(x+y)%3])
   const wall=new T.MeshStandardMaterial({color:0xe2eaf0,transparent:true,opacity:.24,roughness:.25,metalness:.05,depthWrite:false})
   for(const axis of [0,1])for(const sign of [-1,1]){
-    box(root,axis===0?[.45,12,144]:[144,12,.45],axis===0?[sign*72.2,6,0]:[0,6,sign*72.2],wall)
-    box(root,axis===0?[.9,.7,145]:[145,.7,.9],axis===0?[sign*72.2,12.2,0]:[0,12.2,sign*72.2],m.dark)
-    box(root,axis===0?[1.5,1.3,145]:[145,1.3,1.5],axis===0?[sign*72.2,.65,0]:[0,.65,sign*72.2],m.dark)
+    box(root,axis===0?[.45,12,144]:[144,12,.45],axis===0?[sign*72.225,6,0]:[0,6,sign*72.225],wall)
+    box(root,axis===0?[.9,.7,145]:[145,.7,.9],axis===0?[sign*72.45,12.2,0]:[0,12.2,sign*72.45],m.dark)
+    box(root,axis===0?[1.5,1.3,145]:[145,1.3,1.5],axis===0?[sign*72.75,.65,0]:[0,.65,sign*72.75],m.dark)
   }
-  for(const x of [-72,72])for(const z of [-72,0,72])box(root,[1.2,12.7,1.2],[x,6.3,z],m.steel)
+  for(const x of [-72.6,72.6])for(const z of [-72.6,0,72.6])box(root,[1.2,12.7,1.2],[x,6.3,z],m.steel)
   // Recreate the asset's alliance tape in tile coordinates (blue top / red bottom).
   const tape=(x:number,y:number,w:number,d:number,material:T.Material)=>box(root,[w,.06,d],[x-72,.05,72-y],material)
   for(const [x,y,mat] of [[1,132,m.blue],[143,12,m.red]] as const){tape(x,y,2,23,mat)}
@@ -135,8 +135,8 @@ export function buildFlower(parent:T.Object3D,x:number,y:number,m:Mats) {
   rod(root,[0,23,-2.7],[0,23,2.7],.25,m.dark)
 }
 
-export function buildRobot(size:number,wheelDiameter:number,m:Mats) {
-  const root=new T.Group(),wheels:T.Group[]=[],r=wheelDiameter/2,half=size/2
+export function buildRobot(size:number,wheelDiameter:number,m:Mats,intakeMaterial:'gecko'|'silicone'='gecko') {
+  const root=new T.Group(),wheels:T.Group[]=[],intakeWheels:T.Group[]=[],transferRollers:T.Group[]=[],r=Math.min(wheelDiameter/2,size/2-2),half=size/2
   box(root,[size-3,1,size-2],[0,3.5,0],m.dark)
   for(const z of [-half+1,half-1])box(root,[size-2,2.4,.7],[0,4.5,z],m.steel)
   for(const x of [-half+1,half-1])box(root,[.7,2.4,size-2],[x,4.5,0],m.steel)
@@ -144,22 +144,52 @@ export function buildRobot(size:number,wheelDiameter:number,m:Mats) {
   box(root,[4,2.2,3],[-3,7,0],m.dark)
   for(const z of [-half+3,half-3])box(root,[size-7,4,.18],[-2,8,z],m.skin)
   box(root,[.18,4,size-6],[-half+2,8,0],m.skin)
-  for(const x of [-half+3,half-3])for(const z of [-half,half]){
+  for(const x of [-half+r+1,half-r-1])for(const z of [-half+1.7,half-1.7]){
     const wheel=new T.Group();wheel.position.set(x,r,z);root.add(wheel);wheels.push(wheel)
     const tire=new T.Mesh(new T.CylinderGeometry(r,r,1.4,20),m.rubber);tire.rotation.x=Math.PI/2;tire.castShadow=true;wheel.add(tire)
     const hub=new T.Mesh(new T.CylinderGeometry(r*.52,r*.52,1.6,16),m.steel);hub.rotation.x=Math.PI/2;wheel.add(hub)
     for(let i=0;i<8;i++){
       const a=i*Math.PI/4,roller=new T.Mesh(new T.CapsuleGeometry(.3,r*.75,3,6),m.dark)
-      roller.position.set(Math.cos(a)*r,Math.sin(a)*r,0);roller.rotation.set(Math.PI/4,0,a);wheel.add(roller)
+      roller.position.set(Math.cos(a)*r*.78,Math.sin(a)*r*.78,0);roller.rotation.set(Math.PI/4,0,a);wheel.add(roller)
     }
   }
-  const intake=rod(root,[half,2,-half+2],[half,2,half-2],.8,m.green)
-  const turret=new T.Group();turret.position.set(1,16,0);root.add(turret)
-  rod(root,[1,6,0],[1,16,0],.8,m.steel)
-  for(const z of [-3,3])rod(root,[-4,6,z],[1,15,0],.3,m.steel)
-  box(turret,[5,2,4],[0,0,0],m.dark)
-  const barrel=box(turret,[8,2.2,2.8],[4,1,0],m.steel);barrel.rotation.z=Math.PI/6
-  for(const z of [-2,2])rod(turret,[2,0,z],[2,2,z],1,m.rubber)
-  const status=new T.Mesh(new T.BoxGeometry(.4,.25,size-4),new T.MeshBasicMaterial({color:0x64e0c2}));status.position.set(half+1,3,0);root.add(status)
-  return {root,wheels,intake,turret,status}
+  const tread=new T.MeshStandardMaterial({color:intakeMaterial==='gecko'?0x59b8ad:0xad92db,roughness:.88})
+  // Four compliant wheel stacks on a steel axle, behind a front funnel mouth.
+  rod(root,[half-1.5,2.1,-half+1.5],[half-1.5,2.1,half-1.5],.18,m.steel)
+  for(const z of [-half+2.2,-1.6,1.6,half-2.2]){
+    const stack=new T.Group();stack.position.set(half-1.5,2.1,z);root.add(stack);intakeWheels.push(stack)
+    for(const offset of [-.28,.28]){
+      const tire=new T.Mesh(new T.CylinderGeometry(1.25,1.25,.42,24),tread);tire.rotation.x=Math.PI/2;tire.position.z=offset;stack.add(tire)
+      if(intakeMaterial==='gecko')for(let i=0;i<10;i++){
+        const a=i*Math.PI/5,tab=box(stack,[.35,.18,.42],[Math.cos(a)*1.2,Math.sin(a)*1.2,offset],tread);tab.rotation.z=a
+      }
+    }
+    rod(stack,[0,0,-.6],[0,0,.6],.4,m.steel)
+  }
+  for(const sign of [-1,1])rod(root,[half-.4,1.2,sign*(half-1)],[1,5.5,sign*2.1],.18,m.steel)
+  // Opposed roller transfer channel, retaining rails and a sensor-indexed gate.
+  const angle=Math.atan2(4,half+1),length=Math.hypot(half+1,4)
+  const channel=box(root,[length,.3,4.2],[(half-5)/2,4.1,0],m.dark);channel.rotation.z=-angle
+  for(let i=0;i<5;i++)for(const sign of [-1,1]){
+    const at=i/4,x=half-1.8-at*(half+1.2),y=2.8+at*4.8+(sign===1?2.2:0)
+    const roller=new T.Group();roller.position.set(x,y,0);root.add(roller);transferRollers.push(roller)
+    rod(roller,[0,0,-1.8],[0,0,1.8],.42,sign===1?tread:m.rubber)
+    rod(root,[x,y,-2.2],[x,y,2.2],.12,m.steel)
+  }
+  const gate=box(root,[.25,2.5,4],[-2.5,7.3,0],m.amber)
+  box(root,[.7,.7,.7],[-2.8,7.3,2.2],m.dark) // break-beam sensor housing
+  const turret=new T.Group();turret.position.set(0,18,0);root.add(turret)
+  rod(root,[0,6,0],[0,16,0],1,m.steel)
+  for(const z of [-3,3])rod(root,[-3,6,z],[0,16,0],.3,m.steel)
+  rod(root,[0,15.7,0],[0,16.5,0],3.1,m.dark)
+  const bearing=new T.Mesh(new T.TorusGeometry(2.8,.25,8,40),m.steel);bearing.rotation.x=Math.PI/2;bearing.position.y=16.7;root.add(bearing)
+  box(turret,[4,1,4],[0,-.9,0],m.dark)
+  const gun=new T.Group();turret.add(gun)
+  const barrelLength=size*.42
+  box(gun,[barrelLength,.22,3.2],[barrelLength/2,-1.15,0],m.steel)
+  for(const sign of [-1,1])box(gun,[barrelLength,1.8,.18],[barrelLength/2,0,sign*1.7],m.amber)
+  for(const z of [-1.65,1.65])rod(gun,[barrelLength*.68,-.3,z],[barrelLength*.68,.3,z],1.15,m.rubber)
+  const tag=label('SANA','#263a44','#f6b94c',4,1);tag.position.set(-2,10,half-2);root.add(tag)
+  const status=new T.Mesh(new T.BoxGeometry(.3,.25,size-4),new T.MeshBasicMaterial({color:0x64e0c2}));status.position.set(half-.2,3,0);root.add(status)
+  return {root,wheels,intakeWheels,transferRollers,gate,turret,gun,status}
 }

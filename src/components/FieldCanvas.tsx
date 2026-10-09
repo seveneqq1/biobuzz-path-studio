@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useSimulation } from './Simulation'
-import { Arrow, Circle, Group, Image, Layer, Line, Shape, Stage, Text } from 'react-konva'
+import { Arrow, Circle, Group, Image, Layer, Line, Rect, Shape, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
 import { Crosshair, Hand, MousePointer2, PenTool, RotateCcw, ScanLine, ZoomIn, ZoomOut } from 'lucide-react'
 import type { ActionType, CanvasTool, PathAction, Point2D, SegmentDecision, Waypoint } from '../types'
 import { canvasToWorld, clamp, controls, editWaypoint, FIELD_PIXELS, normalizeDegrees, simplify, tangentDegrees, worldToCanvas } from '../lib/geometry'
+import type { RobotConfig } from '../lib/simulation'
+import { clearsWalls } from '../lib/walls'
 
 interface Props {
   points: Waypoint[]
@@ -13,6 +15,9 @@ interface Props {
   selectedId: string | null
   tool: CanvasTool
   snap: boolean
+  config:RobotConfig
+  onConfigChange:(config:RobotConfig)=>void
+  theme:'light'|'dark'
   onToolChange: (tool: CanvasTool) => void
   onSnapChange: (snap: boolean) => void
   onPointsChange: (points: Waypoint[]) => void
@@ -37,9 +42,9 @@ const actionKeys: { key: string; type: ActionType; label: string; color: string 
 const actionMeta = Object.fromEntries(actionKeys.map(action => [action.type, action])) as Record<ActionType, typeof actionKeys[number]>
 interface PendingAction { point: Point2D; sampleIndex: number; action: PathAction }
 
-export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolChange, onSnapChange, onPointsChange, onSelect }: Props) {
+export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,onConfigChange,theme,onToolChange, onSnapChange, onPointsChange, onSelect }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
-  const simulation=useSimulation(points)
+  const simulation=useSimulation(points,config,onConfigChange,theme)
   const stageRef = useRef<Konva.Stage>(null)
   const [size, setSize] = useState({ width: 760, height: 720 })
   const [scale, setScale] = useState(0.86)
@@ -108,6 +113,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
     if (!wrapRef.current) return
     const resize = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect
+      wrapRef.current?.style.setProperty('--field-height',`${height}px`)
       setSize({ width, height })
       const fit = Math.min((width - 56) / FIELD_PIXELS, (height - (width<560?210:170)) / FIELD_PIXELS)
       setScale(clamp(fit, 0.38, 1.4))
@@ -161,7 +167,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
     const local = pointerInField()
     if (!local) return
     const last = stroke.at(-1)
-    if (!last || Math.hypot(local.x - last.x, local.y - last.y) > 7) setStroke(current => {
+    if (!last || Math.hypot(local.x - last.x, local.y - last.y) > 3) setStroke(current => {
       const next = [...current, local]
       strokeRef.current = next
       return next
@@ -173,18 +179,19 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
     if (waitStartRef.current) finishWait()
     setDrawing(false)
     drawingRef.current = false
-    const rawStroke = strokeRef.current
+    const endpoint=pointerInField(),last=strokeRef.current.at(-1)
+    const rawStroke = endpoint && last && Math.hypot(endpoint.x-last.x,endpoint.y-last.y)>.5 ? [...strokeRef.current,endpoint] : strokeRef.current
     const actions = pendingActionsRef.current.sort((a, b) => a.sampleIndex - b.sampleIndex)
     const sampled: { point: Point2D; action?: PathAction }[] = []
     let startIndex = 0
     for (const marker of actions) {
       const endIndex = clamp(marker.sampleIndex, startIndex, rawStroke.length - 1)
-      const section = simplify(rawStroke.slice(startIndex, endIndex + 1), 9)
+      const section = simplify(rawStroke.slice(startIndex, endIndex + 1), 1)
       sampled.push(...section.slice(sampled.length ? 1 : 0).map(point => ({ point })))
       if (sampled.length) sampled[sampled.length - 1].action = marker.action
       startIndex = endIndex
     }
-    const tail = simplify(rawStroke.slice(startIndex), 9)
+    const tail = simplify(rawStroke.slice(startIndex), 1)
     sampled.push(...tail.slice(sampled.length ? 1 : 0).map(point => ({ point })))
     const worldSamples = sampled.map(sample => ({ ...sample, point: canvasToWorld(sample.point, snap) }))
     if (worldSamples.length >= 2) {
@@ -288,6 +295,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, onToolC
           const selected = point.id === selectedId
           const action = point.action ? actionMeta[point.action.type] : null
           return <Group key={point.id}>
+            {selected && <Rect x={canvas.x} y={canvas.y} offsetX={config.size*2.5} offsetY={config.size*2.5} width={config.size*5} height={config.size*5} rotation={-point.heading} fill={clearsWalls(point,config.size)?'#6ee7f215':'#ff6f7728'} stroke={clearsWalls(point,config.size)?'#6ee7f2':'#ff6f77'} strokeWidth={1.5} dash={[6,4]} listening={false}/>}
             {selected && <Line points={[canvas.x, canvas.y, arrowEnd.x, arrowEnd.y]} stroke="#6ee7f2" strokeWidth={2} dash={[5, 4]} listening={false} />}
             <Arrow points={[canvas.x, canvas.y, arrowEnd.x, arrowEnd.y]} stroke={selected ? '#6ee7f2' : '#fff3c6'} fill={selected ? '#6ee7f2' : '#fff3c6'} pointerLength={8} pointerWidth={8} strokeWidth={3} listening={false} />
             <Circle

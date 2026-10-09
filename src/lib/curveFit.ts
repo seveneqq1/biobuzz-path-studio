@@ -34,13 +34,19 @@ const unit = (a: Point2D, b: Point2D) => {
 }
 type Fit = { first: number; last: number; c1: Point2D; c2: Point2D }
 
+const segmentDistance=(p:Point2D,a:Point2D,b:Point2D)=>{
+  const dx=b.x-a.x,dy=b.y-a.y,t=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/(dx*dx+dy*dy||1)))
+  return Math.hypot(p.x-a.x-t*dx,p.y-a.y-t*dy)
+}
+
 // Adaptive least-squares cubic fitting. Shared split tangents guarantee G1 continuity.
 function fit(samples: Point2D[], first: number, last: number, left: Point2D, right: Point2D, tolerance: number): Fit[] {
   const a = samples[first], d = samples[last]
   const lengths = [0]
   for (let i = first+1; i <= last; i++) lengths.push(lengths.at(-1)! + distance(samples[i-1], samples[i]))
   const total = lengths.at(-1)! || 1
-  const ts = lengths.map(length => length/total)
+  let ts = lengths.map(length => length/total)
+  const solve=()=>{
   let aa=0, ab=0, bb=0, ax=0, bx=0
   ts.forEach((t, i) => {
     const u=1-t, b1=3*u*u*t, b2=3*u*t*t
@@ -55,15 +61,40 @@ function fit(samples: Point2D[], first: number, last: number, left: Point2D, rig
   let beta=determinant ? (bx*aa-ax*ab)/determinant : total/3
   if (alpha<=0 || beta<=0 || alpha>total*2 || beta>total*2) alpha=beta=distance(a,d)/3
   const c1={x:a.x+alpha*left.x,y:a.y+alpha*left.y}, c2={x:d.x+beta*right.x,y:d.y+beta*right.y}
-  let worst=0, split=Math.floor((first+last)/2)
-  ts.forEach((t,i) => { const error=distance(cubic(a,c1,c2,d,t),samples[first+i]); if(error>worst){worst=error;split=first+i} })
-  if(worst<=tolerance || last-first<=2) return [{first,last,c1,c2}]
+  return {c1,c2}
+  }
+  let {c1,c2}=solve(),worst=Infinity,split=Math.floor((first+last)/2)
+  // Schneider-style Newton reparameterization lets a cubic describe a circular
+  // sweep without adding anchors just because chord-length t was inaccurate.
+  for(let iteration=0;iteration<9;iteration++) {
+    worst=0
+    ts.forEach((t,i)=>{const error=distance(cubic(a,c1,c2,d,t),samples[first+i]);if(error>worst){worst=error;split=first+i}})
+    if(worst<=tolerance || iteration===8)break
+    const next=ts.map((t,i)=>{
+      if(i===0 || i===ts.length-1)return t
+      const u=1-t,q=cubic(a,c1,c2,d,t),p=samples[first+i]
+      const v={x:3*u*u*(c1.x-a.x)+6*u*t*(c2.x-c1.x)+3*t*t*(d.x-c2.x),y:3*u*u*(c1.y-a.y)+6*u*t*(c2.y-c1.y)+3*t*t*(d.y-c2.y)}
+      const acc={x:6*u*(c2.x-2*c1.x+a.x)+6*t*(d.x-2*c2.x+c1.x),y:6*u*(c2.y-2*c1.y+a.y)+6*t*(d.y-2*c2.y+c1.y)}
+      const denominator=v.x*v.x+v.y*v.y+(q.x-p.x)*acc.x+(q.y-p.y)*acc.y
+      return Math.max(0,Math.min(1,t-((q.x-p.x)*v.x+(q.y-p.y)*v.y)/(denominator||1)))
+    })
+    if(next.some((t,i)=>i>0 && t<=next[i-1]))break
+    ts=next;({c1,c2}=solve())
+  }
+  // Reverse-distance guard rejects lobes/overshoot between source samples.
+  if(worst<=tolerance)for(let j=1;j<120;j++) {
+    const p=cubic(a,c1,c2,d,j/120)
+    let nearest=Infinity
+    for(let k=first;k<last;k++)nearest=Math.min(nearest,segmentDistance(p,samples[k],samples[k+1]))
+    if(nearest>tolerance){worst=nearest;split=Math.floor((first+last)/2);break}
+  }
+  if(worst<=tolerance || last-first===1) return [{first,last,c1,c2}]
   split=Math.max(first+1,Math.min(last-1,split))
   const tangent=unit(samples[split-1],samples[split+1])
   return [...fit(samples,first,split,left,{x:-tangent.x,y:-tangent.y},tolerance), ...fit(samples,split,last,tangent,right,tolerance)]
 }
 
-export function optimizeCurves(points: Waypoint[], tolerance=.35): Waypoint[] {
+export function optimizeCurves(points: Waypoint[], tolerance=.2): Waypoint[] {
   if(points.length<3) return points
   const boundaries=[0,...points.flatMap((p,i)=>i>0 && (p.action || p.interpolation!=='auto') ? [i]:[])]
   if(boundaries.at(-1)!==points.length-1) boundaries.push(points.length-1)
@@ -72,14 +103,14 @@ export function optimizeCurves(points: Waypoint[], tolerance=.35): Waypoint[] {
     const first=boundaries[b-1], last=boundaries[b], samples: Point2D[]=[]
     for(let i=first;i<last;i++) {
       const {c1,c2}=controls(points,i)
-      for(let j=0;j<40;j++) samples.push(cubic(points[i],c1,c2,points[i+1],j/40))
+      for(let j=0;j<80;j++) samples.push(cubic(points[i],c1,c2,points[i+1],j/80))
     }
     samples.push(points[last])
     const curves=fit(samples,0,samples.length-1,unit(samples[0],samples[1]),unit(samples.at(-1)!,samples.at(-2)!),tolerance)
     const chunk: Waypoint[]=[{...points[first],curve:undefined}]
     for(const curve of curves) {
       const end: Waypoint=curve.last===samples.length-1 ? {...points[last],curve:undefined} : {
-        ...samples[curve.last],id:crypto.randomUUID(),heading:points[Math.min(last,first+Math.round(curve.last/40))].heading,interpolation:'auto',controlWeight:1,
+        ...samples[curve.last],id:crypto.randomUUID(),heading:points[Math.min(last,first+Math.round(curve.last/80))].heading,interpolation:'auto',controlWeight:1,
       }
       chunk[chunk.length-1].curve={endId:end.id,c1:curve.c1,c2:curve.c2}
       chunk.push(end)

@@ -4,16 +4,16 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { Focus, Orbit, Video } from 'lucide-react'
 import type { RobotConfig, SimState, profile } from '../lib/simulation'
 import { flowers, hiveCenters } from '../lib/simulation'
-import { cellOpening, HIVE, pieceRadius } from '../lib/hivePhysics'
+import { HIVE, pieceRadius } from '../lib/hivePhysics'
 import { buildField, buildFlower, buildHive, buildHiveFrame, buildRobot, gamePieceFactory, label, materials } from '../lib/sceneModels'
 
 interface Props {
   view:SimState; config:RobotConfig; route:ReturnType<typeof profile>; running:boolean;
-  onBallMove:(id:number,x:number,y:number)=>void; onBack:()=>void
+  onBallMove:(id:number,x:number,y:number)=>void; onBack:()=>void;theme:'light'|'dark'
 }
 type CameraMode='orbit'|'follow'|'hive'
 
-export default function Scene3D({view,config,route,running,onBallMove,onBack}:Props) {
+export default function Scene3D({view,config,route,running,onBallMove,onBack,theme}:Props) {
   const host=useRef<HTMLDivElement>(null)
   const live=useRef({view,running,onBallMove}),cameraMode=useRef<CameraMode>('orbit')
   const [mode,setMode]=useState<CameraMode>('orbit'),[error,setError]=useState('')
@@ -29,7 +29,8 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack}:Pr
     renderer.shadowMap.enabled=true;renderer.shadowMap.type=T.PCFShadowMap
     renderer.outputColorSpace=T.SRGBColorSpace;renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=1.15
     element.appendChild(renderer.domElement)
-    const scene=new T.Scene();scene.background=new T.Color(0xdfe7ea);scene.fog=new T.Fog(0xdfe7ea,390,850)
+    const background=theme==='dark'?0x24343f:0xdfe7ea
+    const scene=new T.Scene();scene.background=new T.Color(background);scene.fog=new T.Fog(background,390,850)
     const camera=new T.PerspectiveCamera(39,1,.5,1000);camera.position.set(155,142,176)
     const controls=new OrbitControls(camera,renderer.domElement)
     controls.target.set(0,15,0);controls.enableDamping=true;controls.dampingFactor=.08;controls.minDistance=65;controls.maxDistance=420
@@ -39,7 +40,7 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack}:Pr
     light.shadow.mapSize.set(2048,2048);light.shadow.camera.left=-115;light.shadow.camera.right=115
     light.shadow.camera.top=115;light.shadow.camera.bottom=-115;light.shadow.camera.near=1;light.shadow.camera.far=380;light.shadow.bias=-.0008
     scene.add(light,new T.DirectionalLight(0xc4ddff,1.3))
-    const m=materials();buildField(scene,m);buildHiveFrame(scene,m)
+    const m=materials();buildField(scene,m,theme==='dark');buildHiveFrame(scene,m)
     const createPiece=gamePieceFactory(m)
     const joints=hiveCenters.map((center,i)=>{
       const joint=buildHive(i===0?'red':'blue',m);joint.position.set(center.x-72,HIVE.pivot,72-center.y);scene.add(joint)
@@ -47,8 +48,9 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack}:Pr
       return {joint,storage,keys:['','']}
     })
     flowers.forEach(f=>buildFlower(scene,f.x,f.y,m))
-    const robot=buildRobot(config.size,config.wheel,m);scene.add(robot.root)
+    const robot=buildRobot(config.size,config.wheel,m,config.intakeMaterial);scene.add(robot.root)
     const hopper=new T.Group();robot.root.add(hopper);let hopperKey=''
+    const feeder=new T.Group();robot.root.add(feeder);let feederKey=''
     const pathPoints=route.samples.map(p=>new T.Vector3(p.x-72,.28,72-p.y))
     if(pathPoints.length>1){
       const curve=new T.CatmullRomCurve3(pathPoints)
@@ -109,10 +111,16 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack}:Pr
       })
       robot.root.position.set(state.x-72,0,72-state.y);robot.root.rotation.y=state.heading*Math.PI/180
       robot.wheels.forEach(w=>{w.rotation.z=-state.driveTime*route.maxSpeed/(config.wheel/2)})
-      robot.intake.rotation.z=state.intake?state.time*12:0
+      robot.intakeWheels.forEach(w=>{w.rotation.z=state.intake?-state.time*12:0})
+      robot.transferRollers.forEach((w,i)=>{w.rotation.z=state.feeder.length||state.activeType==='transfer'?state.time*10*(i%2===0?-1:1):0})
+      robot.gate.rotation.z=state.shooting && state.turretReady?-.7:0
       robot.status.visible=state.intake
-      const targetIndex=config.alliance==='red'?0:1,target=cellOpening(state.hives[targetIndex],state.hives[targetIndex].side)
-      robot.turret.rotation.y=Math.atan2(hiveCenters[targetIndex].y-state.y,hiveCenters[targetIndex].x+target.x-state.x)-state.heading*Math.PI/180
+      robot.turret.rotation.y=(state.turretYaw-state.heading)*Math.PI/180
+      robot.gun.rotation.z=state.turretElevation*Math.PI/180
+      const staged=state.feeder.slice(0,3),stageKey=staged.map(item=>item.piece.kind+item.piece.color).join(',')
+      if(stageKey!==feederKey){feederKey=stageKey;feeder.clear();staged.forEach(item=>feeder.add(createPiece(item.piece.kind,item.piece.color)))}
+      staged.forEach((item,i)=>{const progress=i===0?1-Math.max(0,item.remaining/config.transferTime):0
+        feeder.children[i].position.set(config.size/2-2-progress*(config.size/2+1),3+progress*5,i*2.8)})
       const pieces=state.hopper ?? [] // tolerate a stale state during development hot reload
       const inventoryKey=pieces.map(p=>p.kind+p.color).join(',')
       if(hopperKey!==inventoryKey){hopper.clear();hopperKey=inventoryKey
@@ -137,7 +145,7 @@ export default function Scene3D({view,config,route,running,onBallMove,onBack}:Pr
       geometries.forEach(g=>g.dispose());mats.forEach(m=>m.dispose());textures.forEach(t=>t.dispose())
       renderer.dispose();renderer.domElement.remove()
     }
-  },[config,route])
+  },[config,route,theme])
   return <div className="scene-three" aria-label="3D BIOBUZZ simulation">
     <div className="three-renderer" ref={host}/>
     <div className="scene-heading"><span className="scene-pill">3D playback</span><span>Same route. A new perspective.</span></div>

@@ -6,6 +6,8 @@ import { addCellPiece, advanceHive, cellOpening, createHive, GRAVITY, HIVE, hive
 import type { Hive } from './hivePhysics'
 import type { CellPiece } from './hivePhysics'
 import { compileRoute, nextPathEnd } from './route'
+import { clearsWalls, constrainPose, sweepWalls } from './walls'
+import type { RobotPose } from './walls'
 export { HIVE } from './hivePhysics'
 export type { Hive } from './hivePhysics'
 
@@ -13,9 +15,9 @@ export interface RobotConfig {
   rpm:number; wheel:number; gearing:number; mass:number; force:number; grip:number; efficiency:number
   size:number; turnRate:number; capacity:number; preload:number; shotSpeed:number; shotAngle:number; shotInterval:number; transferTime:number
   alliance:'red'|'blue'
-  autoAim:boolean
+  autoAim:boolean; turretRate:number; intakeMaterial:'gecko'|'silicone'
 }
-export const defaultConfig: RobotConfig={rpm:312,wheel:3.78,gearing:1,mass:12,force:65,grip:.8,efficiency:.75,size:16,turnRate:180,capacity:8,preload:4,shotSpeed:240,shotAngle:55,shotInterval:.45,transferTime:.6,alliance:'red',autoAim:true}
+export const defaultConfig: RobotConfig={rpm:312,wheel:3.78,gearing:1,mass:12,force:65,grip:.8,efficiency:.75,size:16,turnRate:180,capacity:8,preload:4,shotSpeed:240,shotAngle:55,shotInterval:.45,transferTime:.6,alliance:'red',autoAim:true,turretRate:240,intakeMaterial:'gecko'}
 export interface RouteSample extends Point2D {heading:number; s:number; time:number; node?:number}
 export function profile(points:Waypoint[],config:RobotConfig) {
   const samples:RouteSample[]=[]
@@ -59,7 +61,7 @@ export function profile(points:Waypoint[],config:RobotConfig) {
     if(step.kind==='path'){const time=nodeTime(step.endIndex)-nodeTime(step.startIndex);min+=time;max+=time;continue}
     const action=step.action
     const fixed=action.type==='wait'?(action.durationMs??100)/1000:action.type==='transfer'?config.transferTime:action.type==='flowerIntake'?1:0
-    const upper=action.type==='shoot'?config.capacity*config.shotInterval+2*config.shotSpeed/GRAVITY+1.5:fixed
+    const upper=action.type==='shoot'?config.capacity*Math.max(config.shotInterval,config.transferTime)+2*config.shotSpeed/GRAVITY+2.5+180/config.turretRate:action.type==='transfer'?config.capacity*config.transferTime:fixed
     const cap=action.timeoutMs ? action.timeoutMs/1000:Infinity
     if(step.kind==='action'){min+=Math.min(fixed,cap);max+=Math.min(upper,cap)}
     else {
@@ -68,11 +70,18 @@ export function profile(points:Waypoint[],config:RobotConfig) {
       max+=step.mode==='deadline'?time:Math.max(time,Math.min(upper,cap))
     }
   }
-  return {samples,drive,min,max,maxSpeed,acceleration}
+  let wallCollision:RouteSample|undefined
+  let previous:RobotPose|undefined=points[0]
+  for(const sample of samples){
+    if(previous && sweepWalls(previous,sample,config.size).hit){wallCollision=sample;break}
+    previous=sample
+  }
+  return {samples,drive,min,max,maxSpeed,acceleration,wallCollision}
 }
 export interface Ball extends Point2D {id:number;vx:number;vy:number;z:number;vz:number;kind:'pollen'|'nectar';color?:'red'|'blue';flower?:number;released?:boolean}
 export interface SimState {x:number;y:number;heading:number;time:number;driveTime:number;index:number;inventory:number;hopper:CellPiece[];intake:boolean;balls:Ball[];hives:Hive[];action:string;remaining:number;shotClock:number;shooting:boolean;finished:boolean;warning:string;processed:number[];nextId:number;
-  activeType?:string; timeout:number; concurrent?:{endNode:number;mode:'parallel'|'deadline'} }
+  activeType?:string; timeout:number; concurrent?:{endNode:number;mode:'parallel'|'deadline'};
+  blocked:boolean;turretYaw:number;turretElevation:number;turretReady:boolean;feeder:{piece:CellPiece;remaining:number}[] }
 // Asset orientation: blue alliance at top, red at bottom; no rotation is applied.
 export const flowers=[{x:48,y:141},{x:141,y:96},{x:96,y:3},{x:3,y:48}]
 export const hiveCenters=[{x:72,y:59.25},{x:72,y:84.75}]
@@ -82,14 +91,29 @@ export function resetSimulation(points:Waypoint[],config:RobotConfig):SimState {
   for(let i=0;i<4;i++){add(1.5,142.5-i*2.8);add(142.5,1.5+i*2.8)}
   flowers.forEach((f,i)=>{for(let j=0;j<4;j++)add(f.x,f.y,i,1.4+j*2.8)})
   const hopper=Array.from({length:Math.floor(Math.min(config.capacity,config.preload))},()=>({kind:'pollen' as const}))
-  return {x:points[0]?.x??18,y:points[0]?.y??18,heading:points[0]?.heading??0,time:0,driveTime:0,index:0,inventory:hopper.length,hopper,intake:false,balls,hives:[createHive(1,'red'),createHive(0,'blue')],action:'Ready',remaining:0,shotClock:0,shooting:false,finished:false,warning:'',processed:[],nextId:24,timeout:Infinity}
+  const start={x:points[0]?.x??18,y:points[0]?.y??18,heading:points[0]?.heading??0},blocked=!clearsWalls(start,config.size)
+  return {...constrainPose(start,config.size),time:0,driveTime:0,index:0,inventory:hopper.length,hopper,intake:false,balls,hives:[createHive(1,'red'),createHive(0,'blue')],action:blocked?'Blocked':'Ready',remaining:0,shotClock:0,shooting:false,finished:false,warning:blocked?'Start footprint intersects a wall. Move the start inward, then reset.':'',processed:[],nextId:24,timeout:Infinity,blocked,turretYaw:start.heading,turretElevation:config.shotAngle,turretReady:false,feeder:[]}
+}
+export function turretSolution(s:Pick<SimState,'x'|'y'|'hives'>,config:RobotConfig) {
+  const index=config.alliance==='red'?0:1,opening=cellOpening(s.hives[index],s.hives[index].side)
+  const target={x:hiveCenters[index].x+opening.x,y:hiveCenters[index].y},yaw=Math.atan2(target.y-s.y,target.x-s.x)
+  const length=config.size*.42,range=Math.max(.01,distance(s,target)),v2=config.shotSpeed**2
+  let elevation=config.shotAngle*Math.PI/180,reachable=true
+  if(config.autoAim)for(let i=0;i<5;i++){
+    const horizontal=Math.max(.01,range-length*Math.cos(elevation)),rise=opening.z-(18+length*Math.sin(elevation))
+    const discriminant=v2*v2-GRAVITY*(GRAVITY*horizontal*horizontal+2*rise*v2)
+    reachable=discriminant>=0
+    if(!reachable)break
+    elevation=Math.atan((v2+Math.sqrt(discriminant))/(GRAVITY*horizontal))
+  }
+  return {yaw:yaw*180/Math.PI,elevation:elevation*180/Math.PI,reachable}
 }
 export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,route:ReturnType<typeof profile>,dt:number) {
-  if(s.finished)return
+  if(s.finished || s.blocked)return
   s.time+=dt
   const current=route.samples[s.index]
   if(!current){s.finished=true;return}
-  const busy=()=>s.shooting||s.remaining>0||s.activeType==='intake'&&s.concurrent?.mode==='deadline'
+  const busy=()=>s.shooting||s.remaining>0||s.activeType==='transfer'&&s.feeder.length>0||s.activeType==='intake'&&s.concurrent?.mode==='deadline'
   const endAction=()=>{if(s.activeType==='flowerIntake'||s.activeType==='intake'&&s.concurrent?.mode==='deadline')s.intake=false;s.shooting=false;s.remaining=0;s.activeType=undefined;s.timeout=Infinity}
   // A parallel group joins both branches. A deadline cancels its action branch.
   if(s.concurrent && current.node===s.concurrent.endNode) {
@@ -112,30 +136,27 @@ export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,r
   }
   s.timeout-=dt
   if(s.timeout<=0)endAction()
+  // A two-stage roller handoff feeds a sensor-indexed queue, one piece at a time.
+  if(s.feeder.length){s.feeder[0].remaining-=dt;if(s.feeder[0].remaining<=0)s.hopper.push(s.feeder.shift()!.piece)}
+  const aim=turretSolution(s,config),yawError=shortestAngle(s.turretYaw,aim.yaw),pitchError=aim.elevation-s.turretElevation
+  s.turretYaw+=clamp(yawError,-config.turretRate*dt,config.turretRate*dt)
+  s.turretElevation+=clamp(pitchError,-90*dt,90*dt)
+  s.turretReady=Math.abs(shortestAngle(s.turretYaw,aim.yaw))<1 && Math.abs(s.turretElevation-aim.elevation)<1
   if(s.shooting) {
     s.shotClock-=dt
-    if(s.inventory>0 && s.shotClock<=0){
-      const hive=s.hives[config.alliance==='red'?0:1],center=hiveCenters[config.alliance==='red'?0:1]
-      const opening=cellOpening(hive,hive.side)
-      const target={x:center.x+opening.x,y:center.y}
-      const angle=Math.atan2(target.y-s.y,target.x-s.x)
-      const range=Math.max(.01,distance(s,target)),v2=config.shotSpeed**2,g=386.09
-      const rise=opening.z-18
-      const discriminant=v2*v2-g*(g*range*range+2*rise*v2)
-      // High arc reaches the raised cell while descending. Fall back to the manual
-      // angle when launch speed cannot reach it, so misses remain visible.
-      const elevation=config.autoAim && discriminant>=0
-        ? Math.atan((v2+Math.sqrt(discriminant))/(g*range)) : config.shotAngle*Math.PI/180
+    if(s.hopper.length>0 && s.shotClock<=0 && s.turretReady){
+      const angle=s.turretYaw*Math.PI/180,elevation=s.turretElevation*Math.PI/180,length=config.size*.42
       const piece=s.hopper.shift()!
-      s.balls.push({...piece,id:s.nextId++,x:s.x,y:s.y,z:18,vx:Math.cos(angle)*config.shotSpeed*Math.cos(elevation),vy:Math.sin(angle)*config.shotSpeed*Math.cos(elevation),vz:config.shotSpeed*Math.sin(elevation)})
-      s.inventory=s.hopper.length;s.shotClock=config.shotInterval
+      s.balls.push({...piece,id:s.nextId++,x:s.x+Math.cos(angle)*length*Math.cos(elevation),y:s.y+Math.sin(angle)*length*Math.cos(elevation),z:18+length*Math.sin(elevation),vx:Math.cos(angle)*config.shotSpeed*Math.cos(elevation),vy:Math.sin(angle)*config.shotSpeed*Math.cos(elevation),vz:config.shotSpeed*Math.sin(elevation)})
+      s.inventory=s.hopper.length+s.feeder.length;s.shotClock=config.shotInterval
     }
     if(s.inventory===0 && !s.balls.some(b=>b.z>pieceRadius(b.kind)+.2 && b.flower===undefined) && !s.hives.some(h=>h.tipping||h.spilling!==null))endAction()
   } else if(s.remaining>0)s.remaining=Math.max(0,s.remaining-dt)
-  if(!s.shooting && s.remaining===0 && !(s.activeType==='intake'&&s.concurrent?.mode==='deadline'))endAction()
+  if(!busy())endAction()
   const groupAtEnd=s.concurrent && current.node===s.concurrent.endNode
   if(!busy() || s.concurrent && !groupAtEnd) {
     s.action=busy()?`${s.activeType} + Drive`:'Drive'
+    const old={x:s.x,y:s.y,heading:s.heading},oldTime=s.driveTime,oldIndex=s.index
     s.driveTime+=dt
     while(s.index<route.samples.length-1 && route.samples[s.index+1].time<=s.driveTime){
       s.index++
@@ -145,7 +166,16 @@ export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,r
     const a=route.samples[s.index],b=route.samples[s.index+1]??a
     const atAction=a.node!==undefined && points[a.node].action && !s.processed.includes(a.node)
     const t=atAction?0:clamp((s.driveTime-a.time)/Math.max(.00001,b.time-a.time),0,1)
-    s.x=a.x+(b.x-a.x)*t;s.y=a.y+(b.y-a.y)*t;s.heading=a.heading+shortestAngle(a.heading,b.heading)*t
+    const target={x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t,heading:a.heading+shortestAngle(a.heading,b.heading)*t}
+    let previous=old,previousTime=oldTime
+    const sweepTargets=[...route.samples.slice(oldIndex+1,s.index+1),{...target,time:s.driveTime}]
+    for(const next of sweepTargets){
+      const contact=sweepWalls(previous,next,config.size)
+      Object.assign(s,contact.pose)
+      if(contact.hit){s.driveTime=previousTime+(next.time-previousTime)*contact.fraction;s.index=oldIndex;s.blocked=true;s.finished=false;s.intake=false;endAction();s.concurrent=undefined;s.action='Blocked';s.warning='Wall contact: route stopped. Move the route inward and reset.';return}
+      previous=next;previousTime=next.time
+    }
+    s.turretYaw+=shortestAngle(old.heading,s.heading) // chassis motion carries the turret; motor counter-tracks next tick
     if(s.index===route.samples.length-1 && !busy() && !s.concurrent && !(a.node!==undefined && points[a.node].action && !s.processed.includes(a.node)) && !s.balls.some(ball=>ball.flower===undefined && ball.z>pieceRadius(ball.kind)+.2) && !s.hives.some(h=>h.tipping || h.spilling!==null)){s.finished=true;s.intake=false}
   }
   const remove=new Set<number>()
@@ -181,10 +211,18 @@ export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,r
     if(ball.z<r){ball.z=r;ball.vz=Math.abs(ball.vz)>16?-ball.vz*.32:0}
     if(ball.z<=r+.01 && ball.vz===0){const speed=Math.hypot(ball.vx,ball.vy),next=Math.max(0,speed-9*dt);ball.vx*=speed?next/speed:0;ball.vy*=speed?next/speed:0}
     for(const axis of ['x','y'] as const){const velocity=axis==='x'?'vx':'vy';if(ball[axis]<r || ball[axis]>144-r){ball[axis]=clamp(ball[axis],r,144-r);ball[velocity]*=-.48}}
-    const d=distance(ball,s),radius=config.size/2+r
-    if(ball.z<4 && d<radius){
-      if(s.intake && s.inventory<config.capacity){remove.add(ball.id);s.hopper.push({kind:ball.kind,color:ball.color});s.inventory=s.hopper.length}
-      else {const dx=(ball.x-s.x)/(d||1),dy=(ball.y-s.y)/(d||1);ball.x=s.x+dx*radius;ball.y=s.y+dy*radius;ball.vx+=dx*15;ball.vy+=dy*15}
+    const h=s.heading*Math.PI/180,dx=ball.x-s.x,dy=ball.y-s.y,forward=dx*Math.cos(h)+dy*Math.sin(h),lateral=-dx*Math.sin(h)+dy*Math.cos(h),half=config.size/2
+    const inMouth=forward>=half-3 && forward<=half+r+1 && Math.abs(lateral)<half-2
+    if(ball.z<4 && inMouth && s.intake && s.inventory<config.capacity){
+      remove.add(ball.id);s.feeder.push({piece:{kind:ball.kind,color:ball.color},remaining:config.transferTime});s.inventory=s.hopper.length+s.feeder.length
+    } else if(ball.z<4 && Math.abs(forward)<half+r && Math.abs(lateral)<half+r){
+      // Oriented chassis contact: balls at the side/back are pushed, not collected.
+      const f=clamp(forward,-half,half),l=clamp(lateral,-half,half)
+      let nx=forward-f,ny=lateral-l,d=Math.hypot(nx,ny)
+      let surfaceF=f,surfaceL=l
+      if(d<1e-6){if(half-Math.abs(forward)<half-Math.abs(lateral)){nx=Math.sign(forward)||1;ny=0;surfaceF=nx*half}else{nx=0;ny=Math.sign(lateral)||1;surfaceL=ny*half}d=1}
+      if(d<r || Math.abs(forward)<=half&&Math.abs(lateral)<=half){nx/=d;ny/=d;const wx=nx*Math.cos(h)-ny*Math.sin(h),wy=nx*Math.sin(h)+ny*Math.cos(h)
+        ball.x=s.x+(surfaceF+nx*r)*Math.cos(h)-(surfaceL+ny*r)*Math.sin(h);ball.y=s.y+(surfaceF+nx*r)*Math.sin(h)+(surfaceL+ny*r)*Math.cos(h);ball.vx+=wx*15;ball.vy+=wy*15}
     }
   }
   s.balls=s.balls.filter(b=>!remove.has(b.id))
@@ -202,5 +240,5 @@ export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,r
     for(const spill of advanceHive(h,dt))s.balls.push({...spill,id:s.nextId++,x:center.x+spill.x,y:center.y+spill.y,released:true})
   })
   const half=config.size/2
-  s.warning=s.x<half||s.x>144-half||s.y<half||s.y>144-half?'Robot footprint crosses the field wall':Math.abs(s.x-72)<23+half && Math.abs(s.y-72)<19+half?'HIVE envelope overlap: check height and frame clearance':''
+  s.warning=!aim.reachable&&s.shooting?'Launch speed cannot reach the cell; manual-angle shots may miss':Math.abs(s.x-72)<23+half && Math.abs(s.y-72)<19+half?'HIVE envelope overlap: check height and frame clearance':''
 }

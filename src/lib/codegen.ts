@@ -1,6 +1,9 @@
 import type { PathAction, SegmentDecision, Waypoint } from '../types'
 import { controls } from './geometry'
 import { compileRoute } from './route'
+import { defaultConfig, profile } from './simulation'
+import type { RobotConfig } from './simulation'
+import { cellOpening, createHive } from './hivePhysics'
 
 const n = (value: number) => Number(value.toFixed(3)).toString()
 const poseName = (index: number) => index === 0 ? 'startPose' : `pose${index}`
@@ -15,12 +18,14 @@ function interpolation(decision: SegmentDecision, start: number, end: number, po
   }
 }
 
-export function generateJava(points: Waypoint[], decisions: SegmentDecision[]) {
+export function generateJava(points: Waypoint[], decisions: SegmentDecision[],config:RobotConfig=defaultConfig) {
   if (points.length < 2) return '// Add at least two waypoints to generate a path.'
   const route = compileRoute(points)
   const paths = route.flatMap(step => step.kind === 'path' ? [step] : step.kind === 'group' ? [step.path] : [])
   const actions = points.flatMap(point => point.action ? [point.action] : [])
   const used = new Set(actions.map(action => action.type))
+  const collision=profile(points,config).wallCollision
+  const opening=cellOpening(createHive(config.alliance==='red'?1:0,config.alliance),config.alliance==='red'?1:0)
   const fields = points.map((point, index) => `    private final Pose ${poseName(index)} = p.of(${n(point.x)}, ${n(point.y)}, ${n(point.heading)});`).join('\n')
   const pathMethods = paths.map(item => {
     const segments = points.slice(item.startIndex, item.endIndex).map((a, offset) => {
@@ -52,15 +57,66 @@ export function generateJava(points: Waypoint[], decisions: SegmentDecision[]) {
   const commandsMethods = boundedTypes.filter(type => used.has(type)).map(type => {
     const suffix = type === 'shoot' ? 'Shooter' : type === 'transfer' ? 'Transfer' : 'FlowerIntake'
     const startHook=type==='shoot' && used.has('intake') ? '() -> { stopIntake(); startShooter(); }' : `this::start${suffix}`
-    return `    private Command ${type}Command() {\n        return Command.build()\n            .setStart(${startHook})\n            .setExecute(this::update${suffix})\n            .setDone(this::is${suffix}Finished)\n            .setEnd(reason -> stop${suffix}())\n            .requiring(${type === 'shoot' ? 'shooterResource, feedResource' : type === 'transfer' ? 'feedResource' : 'intakeResource'});\n    }`
+    const command=`Command.build()\n            .setStart(${startHook})\n            .setExecute(${type==='shoot'?'() -> { updateShooter(); if (isTurretAtTarget() && isShooterAtSpeed()) advanceFeeder(); else holdFeeder(); }':`this::update${suffix}`})\n            .setDone(this::is${suffix}Finished)\n            .setEnd(reason -> stop${suffix}())\n            .requiring(${type === 'shoot' ? 'shooterResource, feedResource' : type === 'transfer' ? 'feedResource' : 'intakeResource'})`
+    return `    private Command ${type}Command() {\n        return ${type==='shoot'?`sequential(\n            aimTurretCommand(),\n            deadline(${command}, trackTurretCommand())\n        )`:command};\n    }`
   })
+  if(used.has('shoot'))commandsMethods.push(`    // Turret yaw is independent of every path's chassis heading.
+    private Command aimTurretCommand() {
+        return Command.build()
+            .setStart(this::updateTurretTarget)
+            .setExecute(this::updateTurretTarget)
+            .setDone(this::isTurretAtTarget)
+            .setEnd(reason -> stopTurret())
+            .requiring(turretResource);
+    }
+
+    private Command trackTurretCommand() {
+        return Command.build()
+            .setExecute(this::updateTurretTarget)
+            .setDone(() -> false)
+            .setEnd(reason -> stopTurret())
+            .requiring(turretResource);
+    }
+
+    private void updateTurretTarget() {
+        Pose robot = follower.pose();
+        double dx = hiveTargetX() - robot.x(), dy = hiveTargetY() - robot.y();
+        double angle = Math.atan2(dy, dx) - robot.heading();
+        double yaw = Math.atan2(Math.sin(angle), Math.cos(angle));
+        double elevation = Math.toRadians(${n(config.shotAngle)});
+        ${config.autoAim?`double range = Math.max(0.01, Math.hypot(dx, dy));
+        double speedSquared = ${n(config.shotSpeed**2)}; // calibrate measured exit speed
+        for (int i = 0; i < 5; i++) {
+            double horizontal = Math.max(0.01, range - ${n(config.size*.42)} * Math.cos(elevation));
+            double rise = hiveTargetHeight() - (18 + ${n(config.size*.42)} * Math.sin(elevation));
+            double discriminant = speedSquared * speedSquared - 386.09 *
+                (386.09 * horizontal * horizontal + 2 * rise * speedSquared);
+            if (discriminant < 0) throw new IllegalStateException("Hive is outside calibrated shooter range");
+            elevation = Math.atan((speedSquared + Math.sqrt(discriminant)) / (386.09 * horizontal));
+        }`: '// Manual launch elevation selected in Robot setup.'}
+        setTurretTarget(yaw, elevation); // chassis-relative yaw and elevation in RADIANS
+        updateTurretController();
+    }`)
   if (actions.some(action => action.type === 'intake' && action.composition === 'deadline')) commandsMethods.push(`    private Command intakeUntilCancelled() {\n        return Command.build()\n            .setStart(this::startIntake)\n            .setDone(() -> false) // the following path is the deadline\n            .setEnd(reason -> stopIntake())\n            .requiring(intakeResource);\n    }`)
   const hooks = boundedTypes.filter(type => used.has(type)).map(type => {
     const suffix = type === 'shoot' ? 'Shooter' : type === 'transfer' ? 'Transfer' : 'FlowerIntake'
     return `    private void start${suffix}() {\n        throw new IllegalStateException("Wire start${suffix} to your robot hardware before running");\n    }\n    private void update${suffix}() { /* TODO: update subsystem controller / sensors */ }\n    private boolean is${suffix}Finished() { return false; /* TODO: measured completion */ }\n    private void stop${suffix}() { /* TODO: motor power zero / safe servo state */ }`
   })
   if (used.has('intake')) hooks.push(`    private void startIntake() {\n        throw new IllegalStateException("Wire startIntake to your robot hardware before running");\n    }\n    private void stopIntake() { /* TODO: motor power zero */ }`)
-  const stops = [...boundedTypes.filter(type => used.has(type)).map(type => `        stop${type === 'shoot' ? 'Shooter' : type === 'transfer' ? 'Transfer' : 'FlowerIntake'}();`), ...(used.has('intake') ? ['        stopIntake();'] : [])]
+  if(used.has('shoot'))hooks.push(`    // Raised ${config.alliance} cell at reset. Update these from observed hive state after a tip.
+    private double hiveTargetX() { return ${n(72+opening.x)}; }
+    private double hiveTargetY() { return ${config.alliance==='red'?'59.25':'84.75'}; }
+    private double hiveTargetHeight() { return ${n(opening.z)}; }
+    private void setTurretTarget(double yawRadians, double elevationRadians) {
+        throw new IllegalStateException("Wire turret PID, encoder, pitch servo and cable limits before running");
+    }
+    private void updateTurretController() { /* TODO: closed-loop yaw/pitch control; never rotate chassis to aim */ }
+    private boolean isTurretAtTarget() { return false; /* TODO: yaw encoder AND pitch tolerance */ }
+    private boolean isShooterAtSpeed() { return false; /* TODO: measured flywheel velocity */ }
+    private void advanceFeeder() { /* TODO: feed one piece, then close gate until next shot */ }
+    private void holdFeeder() { /* TODO: indexer power zero; close feed gate while aiming */ }
+    private void stopTurret() { /* TODO: safe yaw/pitch outputs */ }`)
+  const stops = [...boundedTypes.filter(type => used.has(type)).map(type => `        stop${type === 'shoot' ? 'Shooter' : type === 'transfer' ? 'Transfer' : 'FlowerIntake'}();`), ...(used.has('intake') ? ['        stopIntake();'] : []),...(used.has('shoot')?['        holdFeeder();','        stopTurret();']:[])]
 
   return `package org.firstinspires.ftc.teamcode;
 
@@ -84,8 +140,10 @@ import org.firstinspires.ftc.teamcode.pedro.Constants;
 // Requires Pedro 3 + Ivy (com.pedropathing.ivy:pedro:1.1.1).
 // Positions are inches; PoseFactory headings are DEGREES.
 // Wire the fail-fast subsystem hooks below before operating a real robot.
-@Autonomous(name = "BIOBUZZ Ivy Auto")
-public class BiobuzzAuto extends OpMode {
+// Intake template: ${config.intakeMaterial} wheel stacks -> opposed rollers -> break-beam indexer.
+// Transfer must finish on a sensor/encoder, not an unconditional timer.
+@Autonomous(name = "SANA path Ivy Auto")
+public class SanaAuto extends OpMode {
     private Follower follower;
     private Command auto;
     private final PoseFactory p = PoseFactory.degrees();
@@ -95,10 +153,13 @@ ${fields}
     private final Object shooterResource = new Object();
     private final Object intakeResource = new Object();
     private final Object feedResource = new Object();
+    private final Object turretResource = new Object();
+    private final boolean routeClearsWalls = ${!collision}; // ${config.size}-inch rotated square footprint
 
     @Override
     public void init() {
         Scheduler.reset();
+        if (!routeClearsWalls) throw new IllegalArgumentException("${collision?`Route intersects a wall near (${n(collision.x)}, ${n(collision.y)}). Edit the route before running.`:'Recheck wall clearance after changing the robot footprint.'}");
         follower = Constants.create(hardwareMap);
         follower.setPose(startPose);
         // TODO: initialize your hardware/subsystems here.
@@ -164,7 +225,7 @@ export function downloadJava(code: string) {
   const url = URL.createObjectURL(new Blob([code], { type: 'text/x-java' }))
   const anchor = document.createElement('a')
   anchor.href = url
-  anchor.download = 'BiobuzzAuto.java'
+  anchor.download = 'SanaAuto.java'
   anchor.click()
   URL.revokeObjectURL(url)
 }
