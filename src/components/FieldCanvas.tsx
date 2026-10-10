@@ -128,7 +128,8 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,
     }
     const resize = new ResizeObserver(fitView)
     resize.observe(element)
-    const dock=element.querySelector('.simulation-ui');if(dock)resize.observe(dock)
+    // Warning text can resize the dock during a drag; only resize the view
+    // when the drawing workspace itself changes, preserving its zoom/pan.
     fitView()
     return () => resize.disconnect()
   }, [])
