@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Hexagon, Moon, Route, RotateCcw, Sparkles, Sun, Undo2, Wand2 } from 'lucide-react'
+import { Download, Hexagon, Moon, Route, RotateCcw, ShieldCheck, Sparkles, Sun, Undo2, Wand2 } from 'lucide-react'
 import { FieldCanvas } from './components/FieldCanvas'
 import { Inspector } from './components/Inspector'
 import { CodePanel } from './components/CodePanel'
@@ -7,8 +7,8 @@ import { editWaypoint, seedWaypoints } from './lib/geometry'
 import { analyzePath } from './lib/optimizer'
 import { downloadJava, generateJava } from './lib/codegen'
 import type { CanvasTool, Waypoint } from './types'
-import { defaultConfig } from './lib/simulation'
-import { addControlPoint, autoBuild, bestHeadings, closenessOptions, removeControlPoint, setControlPoints } from './lib/smartPath'
+import { defaultConfig, profile } from './lib/simulation'
+import { addControlPoint, alignToFlower, autoBuild, BUFFER, bestHeadings, closenessOptions, makeSafe, removeControlPoint, setControlPoints } from './lib/smartPath'
 import type { Closeness } from './lib/smartPath'
 import { nearestSafePose } from './lib/safeSpot'
 
@@ -33,6 +33,7 @@ export default function App() {
   const [snappedId,setSnappedId]=useState<string|null>(null)
   const decisions = useMemo(() => analyzePath(points), [points])
   const code = useMemo(() => generateJava(points, decisions,config), [points, decisions,config])
+  const unsafe = useMemo(() => { const run = profile(points, config); return !!(run.wallCollision || run.supportCollision) }, [points, config])
   const selectedIndex = points.findIndex(point => point.id === selectedId)
   const selectedPoint = selectedIndex >= 0 ? points[selectedIndex] : null
   const selectedDecision = selectedIndex > 0 ? decisions[selectedIndex - 1] : null
@@ -44,6 +45,11 @@ export default function App() {
   }
   const updateSelected = (changes: Partial<Waypoint>) => {
     if (!selectedId) return
+    const old = points.find(p => p.id === selectedId)
+    if (old && changes.action?.type === 'flowerIntake' && old.action?.type !== 'flowerIntake') {
+      const { x, y, heading } = alignToFlower(old, config.size)
+      changes = { ...changes, x, y, heading }
+    }
     updatePoints(editWaypoint(points,selectedId,changes))
   }
   const undo = () => {
@@ -62,6 +68,11 @@ export default function App() {
     setOptimized(true)
     flash('Headings chosen by simulating each option against drive/turn limits and obstacles.')
     window.setTimeout(() => setOptimized(false), 1700)
+  }
+  const fixSafety = () => {
+    const result = makeSafe(points, config)
+    updatePoints(result.points)
+    flash(`${result.moved} point${result.moved === 1 ? '' : 's'} moved to the closest safe spot · ${result.clear ? 'route is clear ✓' : 'some contact remains — try Auto-build path'}`)
   }
   const build = (source: Waypoint[], fromDrawing = false) => {
     const { points: next, report } = autoBuild(source, config, closeness)
@@ -93,6 +104,7 @@ export default function App() {
         <div className="section-bar">
           <div><Route size={15}/>Your route <small>{Math.max(0, points.length - 1)} segments · {points.filter(point => point.action).length} commands</small></div>
           <div className="section-actions">
+            {unsafe && <button className="make-safe-button" onClick={fixSafety} title="Move unsafe points to the closest safe spot and bend unsafe paths clear of obstacles"><ShieldCheck size={15} />Make route safe</button>}
             <label className="auto-draw-toggle" title="Automatically clean up freehand drawings into Pedro paths"><input type="checkbox" checked={autoAfterDraw} onChange={e=>setAutoAfterDraw(e.target.checked)}/>Auto-build after drawing</label>
             <button onClick={undo} disabled={!history.length} title="Undo"><Undo2 size={15} />Undo</button>
             <button onClick={() => { updatePoints(seedWaypoints()); setSelectedId(null) }} title="Reset demo path"><RotateCcw size={15} />Reset</button>
@@ -116,16 +128,17 @@ export default function App() {
             controlCount={selectedIndex>=0&&selectedIndex<points.length-1?(points[selectedIndex].controlPoints?.length??null):null}
             onAddControl={()=>updatePoints(addControlPoint(points,selectedIndex))}
             onRemoveControl={()=>updatePoints(removeControlPoint(points,selectedIndex))}
+            onAlignFlower={()=>{if(!selectedPoint)return;const {x,y,heading}=alignToFlower(selectedPoint,config.size);updateSelected({x,y,heading})}}
             onStraighten={()=>updatePoints(setControlPoints(points,selectedIndex,[]))}
             snapMessage={snappedId===selectedId?snapMessage:''}
             shootWhileMoving={config.shootWhileMoving&&selectedIndex<points.length-1}
             onSnapSafe={()=>{
               if(!selectedPoint)return
               setSnappedId(selectedPoint.id)
-              const safe=nearestSafePose(selectedPoint,config.size,1)
+              const safe=nearestSafePose(selectedPoint,config.size,BUFFER)
               if(!safe){setSnapMessage('No buffered safe spot found for this footprint.');return}
               updateSelected({x:safe.x,y:safe.y})
-              setSnapMessage(`Snapped to (${safe.x.toFixed(2)}, ${safe.y.toFixed(2)}) with 1 in clearance. Adjacent curves are checked separately.`)
+              setSnapMessage(`Snapped to (${safe.x.toFixed(2)}, ${safe.y.toFixed(2)}) with ${BUFFER} in clearance. Adjacent curves are checked separately.`)
             }}
             onDelete={() => {
               if (!selectedId) return

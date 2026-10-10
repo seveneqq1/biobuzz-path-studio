@@ -378,3 +378,5 @@ footer b,.group-title,.model-summary b { color:var(--text); }
 .control-buttons button:hover:not(:disabled) { border-color:#b69cff;background:var(--note); }
 .control-buttons button:disabled { opacity:.4;cursor:not-allowed; }
 @media (max-width:1400px) { .season-select { display:none; } }
+.section-actions .make-safe-button { color:#fff !important;background:#e5484d !important;border-color:#e5484d !important;font-weight:700;animation:safe-pulse 1.6s ease-in-out infinite; }
+@keyframes safe-pulse { 50% { box-shadow:0 0 0 4px #e5484d33; } }

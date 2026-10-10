@@ -16,6 +16,7 @@ interface Props {
   onAddControl:()=>void
   onRemoveControl:()=>void
   onStraighten:()=>void
+  onAlignFlower:()=>void
 }
 
 const interpolationOptions: { value: Interpolation; label: string }[] = [
@@ -26,7 +27,7 @@ const interpolationOptions: { value: Interpolation; label: string }[] = [
   { value: 'piecewise', label: 'Piecewise' },
 ]
 
-export function Inspector({ point, index, decision, onChange, onDelete, onSnapSafe,snapMessage,shootWhileMoving,isLast,controlCount,onAddControl,onRemoveControl,onStraighten }: Props) {
+export function Inspector({ point, index, decision, onChange, onDelete, onSnapSafe,snapMessage,shootWhileMoving,isLast,controlCount,onAddControl,onRemoveControl,onStraighten,onAlignFlower }: Props) {
   if (!point) return <div className="inspector-empty">
     <div className="empty-orbit"><MapPin size={23} /></div>
     <h3>No waypoint selected</h3>
@@ -71,6 +72,7 @@ export function Inspector({ point, index, decision, onChange, onDelete, onSnapSa
           </select>
         </label>
         {point.action.type==='shoot'&&shootWhileMoving&&<p>Shoot while moving is on. This command runs alongside the next path; turn the toggle off for a stopped shot.</p>}
+        {point.action.type==='flowerIntake'&&<button className="safe-snap-button" onClick={onAlignFlower}><MapPin size={14}/>Align to nearest flower <small>face it, mouth on the pollen</small></button>}
         {point.action.type==='flowerIntake'&&<p>Removing pollen from a flower does not award points. Flower scoring is an end-of-match achievement, not AUTO scoring.</p>}
         {point.action.type !== 'wait' && point.action.type !== 'intake' && <label className="command-label">Timeout race (0 = none)
           <div className="wait-input"><Timer size={14}/><input aria-label="Command timeout" type="number" min="0" step="100" value={point.action.timeoutMs ?? 0} onChange={event => onChange({action: {...point.action!, timeoutMs: Math.max(0, Math.round(Number(event.target.value) / 100) * 100)}})}/><span>ms</span></div>
@@ -85,7 +87,7 @@ export function Inspector({ point, index, decision, onChange, onDelete, onSnapSa
         <label><span>X</span><input type="number" min="0" max="144" step="0.1" value={Number(point.x.toFixed(1))} onChange={e => numberChange('x', e.target.value)} /></label>
         <label><span>Y</span><input type="number" min="0" max="144" step="0.1" value={Number(point.y.toFixed(1))} onChange={e => numberChange('y', e.target.value)} /></label>
       </div>
-      <button className="safe-snap-button" onClick={onSnapSafe}><MapPin size={14}/>Snap to nearest safe spot <small>+1 in buffer</small></button>
+      <button className="safe-snap-button" onClick={onSnapSafe}><MapPin size={14}/>Snap to nearest safe spot <small>+0.5 in buffer</small></button>
       {snapMessage&&<p className="inspector-help" role="status">{snapMessage}</p>}
     </div>
 

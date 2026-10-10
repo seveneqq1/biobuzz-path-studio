@@ -136,7 +136,7 @@ export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,r
   const current=route.samples[s.index]
   if(!current){s.finished=true;return}
   const busy=()=>s.shooting||s.remaining>0||s.activeType==='transfer'&&s.feeder.length>0||s.activeType==='intake'&&s.concurrent?.mode==='deadline'
-  const endAction=()=>{if(s.activeType==='flowerIntake'||s.activeType==='intake'&&s.concurrent?.mode==='deadline')s.intake=false;s.shooting=false;s.remaining=0;s.activeType=undefined;s.timeout=Infinity}
+  const endAction=()=>{if(s.activeType==='intake'&&s.concurrent?.mode==='deadline')s.intake=false;s.shooting=false;s.remaining=0;s.activeType=undefined;s.timeout=Infinity}
   // A parallel group joins both branches. A deadline cancels its action branch.
   if(s.concurrent && current.node===s.concurrent.endNode) {
     if(s.concurrent.mode==='deadline')endAction()
@@ -152,7 +152,12 @@ export function stepSimulation(s:SimState,points:Waypoint[],config:RobotConfig,r
       if(action.type==='shoot'){s.shooting=true;s.remaining=0;s.shotClock=0;s.intake=false}
       if(action.type==='flowerIntake') {
         s.intake=true
-        for(const ball of s.balls)if(ball.flower!==undefined && distance(ball,s)<config.size/2+6)ball.flower=undefined
+        // Pollen drops from the nearest flower; the intake stays latched (like
+        // the intake command) so pieces that land or roll late are still collected.
+        const nearest=flowers.reduce((a,b)=>distance(a,s)<=distance(b,s)?a:b),index=flowers.indexOf(nearest)
+        if(distance(nearest,s)<config.size/2+10)for(const ball of s.balls)if(ball.flower===index){
+          ball.flower=undefined;const h=s.heading*Math.PI/180;ball.vx=-Math.cos(h)*6;ball.vy=-Math.sin(h)*6
+        }
       }
     }
   }

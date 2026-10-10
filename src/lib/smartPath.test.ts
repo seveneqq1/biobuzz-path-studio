@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { Waypoint } from '../types'
-import { addControlPoint, autoBuild, bestHeadings } from './smartPath'
-import { defaultConfig, profile } from './simulation'
+import { addControlPoint, autoBuild, bestHeadings, makeSafe } from './smartPath'
+import { defaultConfig, profile, resetSimulation, stepSimulation } from './simulation'
 import { bezierAt, segmentPoints, seedWaypoints } from './geometry'
 import { generateJava } from './codegen'
 import { analyzePath } from './optimizer'
@@ -56,4 +56,25 @@ test('adding a control point keeps the curve shape and exports a higher-order Pe
   const code = generateJava(elevated, analyzePath(elevated), defaultConfig)
   assert.match(code, /Paths\.curve\(startPose,\n(\s+p\.of\([^)]*\),\n){2}\s+pose1\)/)
   assert.match(generateJava([wp(20, 20, { controlPoints: [] }), wp(60, 20)], analyzePath([wp(20, 20), wp(60, 20)])), /Paths\.line\(startPose, pose1\)/)
+})
+
+test('make safe moves unsafe points and bends unsafe paths clear', () => {
+  const route = [wp(30, 72 - HIVE.frameDepth / 2, { heading: 0 }), wp(72, 72 - HIVE.frameDepth / 2, { heading: 0 }), wp(114, 72 - HIVE.frameDepth / 2, { heading: 0 })]
+  const result = makeSafe(route, defaultConfig)
+  assert.equal(result.points.length, 3)
+  assert.ok(result.moved >= 1)
+  assert.ok(result.clear)
+})
+
+test('flower intake: auto-build aligns to the flower and the simulator collects its pollen', () => {
+  const drawn = [wp(30, 100, { heading: 90 }), wp(50, 120), wp(47, 132, { action: { type: 'flowerIntake' } }), wp(40, 110)]
+  const { points, report } = autoBuild(drawn, defaultConfig)
+  const flower = points.find(p => p.action?.type === 'flowerIntake')!
+  assert.deepEqual([flower.x, flower.y, flower.heading], [48, 144 - defaultConfig.size / 2 - .5, 90])
+  assert.ok(report.clear)
+  const config = { ...defaultConfig, preload: 0 }
+  const route = profile(points, config), state = resetSimulation(points, config)
+  for (let i = 0; i < 3000 && !state.finished && !state.blocked; i++) stepSimulation(state, points, config, route, 1 / 120)
+  assert.equal(state.blocked, false)
+  assert.equal(state.inventory, 4)
 })
