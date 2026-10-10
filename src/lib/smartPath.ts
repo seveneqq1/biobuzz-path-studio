@@ -1,7 +1,7 @@
 import type { Point2D, ResolvedInterpolation, Waypoint } from '../types'
 import { bezierAt, distance, segmentPoints, shortestAngle, tangentDegrees } from './geometry'
 import { bufferedPoseSafe, nearestSafePose } from './safeSpot'
-import { profile } from './simulation'
+import { flowers, profile } from './simulation'
 import type { RobotConfig } from './simulation'
 
 export type Closeness = 'close' | 'balanced' | 'fast'
@@ -16,7 +16,7 @@ const SETTINGS: Record<Closeness, { tolerance: number; deviation: number }> = {
   balanced: { tolerance: 3, deviation: .12 },
   fast: { tolerance: 10, deviation: .03 },
 }
-const BUFFER = 1
+export const BUFFER = .5
 const MAX_CONTROLS = 5
 
 const binomial = (n: number, k: number) => { let r = 1; for (let i = 1; i <= k; i++) r = r * (n - k + i) / i; return r }
@@ -137,7 +137,22 @@ function deviation(ctrl: Point2D[], intent: Point2D[]) {
   return { mean: all.reduce((s, d) => s + d, 0) / all.length, max: Math.max(...all) }
 }
 
+// Flowers sit against the walls: drive square to the wall, intake mouth on
+// the flower, with the safety buffer between bumper and wall.
+export function alignToFlower(point: Waypoint, size: number): Waypoint {
+  const flower = flowers.reduce((a, b) => distance(a, point) <= distance(b, point) ? a : b)
+  const wallX = flower.x < 10 ? 0 : flower.x > 134 ? 144 : null
+  const offset = size / 2 + BUFFER
+  const pose = wallX !== null
+    ? { x: wallX === 0 ? offset : 144 - offset, y: flower.y, heading: wallX === 0 ? 180 : 0 }
+    : { x: flower.x, y: flower.y > 72 ? 144 - offset : offset, heading: flower.y > 72 ? 90 : 270 }
+  return { ...point, ...pose, headingLocked: true }
+}
+
+const isFlower = (p: Waypoint) => p.action?.type === 'flowerIntake'
+
 function snapSafe(point: Waypoint, size: number): Waypoint {
+  if (isFlower(point)) return alignToFlower(point, size)
   if (bufferedPoseSafe(point, size, BUFFER)) return point
   const safe = nearestSafePose(point, size, BUFFER)
   return safe ? { ...point, x: safe.x, y: safe.y } : point
@@ -152,7 +167,7 @@ export function autoBuild(points: Waypoint[], config: RobotConfig, closeness: Cl
   if (points.length < 2) return { points, report: { sections: 0, controls: 0, before: points.length, after: points.length, clear: true, drive: 0, snapped: 0 } }
   const majors = points.flatMap((p, i) => i === 0 || i === points.length - 1 || p.action || p.headingLocked ? [i] : [])
   let snapped = 0, clear = true
-  const snap = (p: Waypoint) => { const s = snapSafe(p, size); if (s !== p) snapped++; return { ...s, curve: undefined, controlPoints: undefined } }
+  const snap = (p: Waypoint) => { const s = snapSafe(p, size); if (distance(s, p) > 1e-6) snapped++; return { ...s, curve: undefined, controlPoints: undefined } }
   const out: Waypoint[] = [snap(points[0])]
   for (let s = 1; s < majors.length; s++) {
     const first = majors[s - 1], last = majors[s]
@@ -224,7 +239,7 @@ export function bestHeadings(points: Waypoint[], config: RobotConfig): Waypoint[
 // then bend any still-unsafe path with its control points.
 export function makeSafe(points: Waypoint[], config: RobotConfig): { points: Waypoint[]; moved: number; clear: boolean } {
   let moved = 0
-  const next = points.map(p => { const s = snapSafe(p, config.size); if (s !== p) moved++; return s })
+  const next = points.map(p => { const s = snapSafe(p, config.size); if (distance(s, p) > 1e-6) moved++; return s })
   for (let i = 0; i < next.length - 1; i++) {
     const a = next[i], b = next[i + 1]
     if (!collisions(segmentPoints(next, i), a.heading, b.heading, config.size).length) continue

@@ -8,7 +8,7 @@ import { analyzePath } from './lib/optimizer'
 import { downloadJava, generateJava } from './lib/codegen'
 import type { CanvasTool, Waypoint } from './types'
 import { defaultConfig, profile } from './lib/simulation'
-import { addControlPoint, autoBuild, bestHeadings, closenessOptions, makeSafe, removeControlPoint, setControlPoints } from './lib/smartPath'
+import { addControlPoint, alignToFlower, autoBuild, BUFFER, bestHeadings, closenessOptions, makeSafe, removeControlPoint, setControlPoints } from './lib/smartPath'
 import type { Closeness } from './lib/smartPath'
 import { nearestSafePose } from './lib/safeSpot'
 
@@ -45,6 +45,11 @@ export default function App() {
   }
   const updateSelected = (changes: Partial<Waypoint>) => {
     if (!selectedId) return
+    const old = points.find(p => p.id === selectedId)
+    if (old && changes.action?.type === 'flowerIntake' && old.action?.type !== 'flowerIntake') {
+      const { x, y, heading } = alignToFlower(old, config.size)
+      changes = { ...changes, x, y, heading }
+    }
     updatePoints(editWaypoint(points,selectedId,changes))
   }
   const undo = () => {
@@ -123,16 +128,17 @@ export default function App() {
             controlCount={selectedIndex>=0&&selectedIndex<points.length-1?(points[selectedIndex].controlPoints?.length??null):null}
             onAddControl={()=>updatePoints(addControlPoint(points,selectedIndex))}
             onRemoveControl={()=>updatePoints(removeControlPoint(points,selectedIndex))}
+            onAlignFlower={()=>{if(!selectedPoint)return;const {x,y,heading}=alignToFlower(selectedPoint,config.size);updateSelected({x,y,heading})}}
             onStraighten={()=>updatePoints(setControlPoints(points,selectedIndex,[]))}
             snapMessage={snappedId===selectedId?snapMessage:''}
             shootWhileMoving={config.shootWhileMoving&&selectedIndex<points.length-1}
             onSnapSafe={()=>{
               if(!selectedPoint)return
               setSnappedId(selectedPoint.id)
-              const safe=nearestSafePose(selectedPoint,config.size,1)
+              const safe=nearestSafePose(selectedPoint,config.size,BUFFER)
               if(!safe){setSnapMessage('No buffered safe spot found for this footprint.');return}
               updateSelected({x:safe.x,y:safe.y})
-              setSnapMessage(`Snapped to (${safe.x.toFixed(2)}, ${safe.y.toFixed(2)}) with 1 in clearance. Adjacent curves are checked separately.`)
+              setSnapMessage(`Snapped to (${safe.x.toFixed(2)}, ${safe.y.toFixed(2)}) with ${BUFFER} in clearance. Adjacent curves are checked separately.`)
             }}
             onDelete={() => {
               if (!selectedId) return
