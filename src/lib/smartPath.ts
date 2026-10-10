@@ -220,6 +220,23 @@ export function bestHeadings(points: Waypoint[], config: RobotConfig): Waypoint[
   return next
 }
 
+// Keep the route's structure: move unsafe points to the nearest safe pose,
+// then bend any still-unsafe path with its control points.
+export function makeSafe(points: Waypoint[], config: RobotConfig): { points: Waypoint[]; moved: number; clear: boolean } {
+  let moved = 0
+  const next = points.map(p => { const s = snapSafe(p, config.size); if (s !== p) moved++; return s })
+  for (let i = 0; i < next.length - 1; i++) {
+    const a = next[i], b = next[i + 1]
+    if (!collisions(segmentPoints(next, i), a.heading, b.heading, config.size).length) continue
+    let pts = segmentPoints(next, i)
+    if (pts.length < 4) pts = fitBezier(Array.from({ length: 30 }, (_, j) => bezierAt(pts, j / 29)), a, b, 2)
+    const { ctrl } = repair(pts, a.heading, b.heading, config.size)
+    next[i] = { ...a, curve: undefined, controlPoints: ctrl.slice(1, -1) }
+  }
+  const run = profile(next, config)
+  return { points: next, moved, clear: !run.wallCollision && !run.supportCollision }
+}
+
 // Pedro-visualizer style editing helpers for the segment leaving `index`.
 export function addControlPoint(points: Waypoint[], index: number): Waypoint[] {
   if (index < 0 || index >= points.length - 1) return points

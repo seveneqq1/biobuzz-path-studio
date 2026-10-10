@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { Waypoint } from '../types'
-import { addControlPoint, autoBuild, bestHeadings } from './smartPath'
+import { addControlPoint, autoBuild, bestHeadings, makeSafe } from './smartPath'
 import { defaultConfig, profile } from './simulation'
 import { bezierAt, segmentPoints, seedWaypoints } from './geometry'
 import { generateJava } from './codegen'
@@ -56,4 +56,12 @@ test('adding a control point keeps the curve shape and exports a higher-order Pe
   const code = generateJava(elevated, analyzePath(elevated), defaultConfig)
   assert.match(code, /Paths\.curve\(startPose,\n(\s+p\.of\([^)]*\),\n){2}\s+pose1\)/)
   assert.match(generateJava([wp(20, 20, { controlPoints: [] }), wp(60, 20)], analyzePath([wp(20, 20), wp(60, 20)])), /Paths\.line\(startPose, pose1\)/)
+})
+
+test('make safe moves unsafe points and bends unsafe paths clear', () => {
+  const route = [wp(30, 72 - HIVE.frameDepth / 2, { heading: 0 }), wp(72, 72 - HIVE.frameDepth / 2, { heading: 0 }), wp(114, 72 - HIVE.frameDepth / 2, { heading: 0 })]
+  const result = makeSafe(route, defaultConfig)
+  assert.equal(result.points.length, 3)
+  assert.ok(result.moved >= 1)
+  assert.ok(result.clear)
 })

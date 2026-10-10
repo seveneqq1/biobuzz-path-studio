@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Hexagon, Moon, Route, RotateCcw, Sparkles, Sun, Undo2, Wand2 } from 'lucide-react'
+import { Download, Hexagon, Moon, Route, RotateCcw, ShieldCheck, Sparkles, Sun, Undo2, Wand2 } from 'lucide-react'
 import { FieldCanvas } from './components/FieldCanvas'
 import { Inspector } from './components/Inspector'
 import { CodePanel } from './components/CodePanel'
@@ -7,8 +7,8 @@ import { editWaypoint, seedWaypoints } from './lib/geometry'
 import { analyzePath } from './lib/optimizer'
 import { downloadJava, generateJava } from './lib/codegen'
 import type { CanvasTool, Waypoint } from './types'
-import { defaultConfig } from './lib/simulation'
-import { addControlPoint, autoBuild, bestHeadings, closenessOptions, removeControlPoint, setControlPoints } from './lib/smartPath'
+import { defaultConfig, profile } from './lib/simulation'
+import { addControlPoint, autoBuild, bestHeadings, closenessOptions, makeSafe, removeControlPoint, setControlPoints } from './lib/smartPath'
 import type { Closeness } from './lib/smartPath'
 import { nearestSafePose } from './lib/safeSpot'
 
@@ -33,6 +33,7 @@ export default function App() {
   const [snappedId,setSnappedId]=useState<string|null>(null)
   const decisions = useMemo(() => analyzePath(points), [points])
   const code = useMemo(() => generateJava(points, decisions,config), [points, decisions,config])
+  const unsafe = useMemo(() => { const run = profile(points, config); return !!(run.wallCollision || run.supportCollision) }, [points, config])
   const selectedIndex = points.findIndex(point => point.id === selectedId)
   const selectedPoint = selectedIndex >= 0 ? points[selectedIndex] : null
   const selectedDecision = selectedIndex > 0 ? decisions[selectedIndex - 1] : null
@@ -62,6 +63,11 @@ export default function App() {
     setOptimized(true)
     flash('Headings chosen by simulating each option against drive/turn limits and obstacles.')
     window.setTimeout(() => setOptimized(false), 1700)
+  }
+  const fixSafety = () => {
+    const result = makeSafe(points, config)
+    updatePoints(result.points)
+    flash(`${result.moved} point${result.moved === 1 ? '' : 's'} moved to the closest safe spot · ${result.clear ? 'route is clear ✓' : 'some contact remains — try Auto-build path'}`)
   }
   const build = (source: Waypoint[], fromDrawing = false) => {
     const { points: next, report } = autoBuild(source, config, closeness)
@@ -93,6 +99,7 @@ export default function App() {
         <div className="section-bar">
           <div><Route size={15}/>Your route <small>{Math.max(0, points.length - 1)} segments · {points.filter(point => point.action).length} commands</small></div>
           <div className="section-actions">
+            {unsafe && <button className="make-safe-button" onClick={fixSafety} title="Move unsafe points to the closest safe spot and bend unsafe paths clear of obstacles"><ShieldCheck size={15} />Make route safe</button>}
             <label className="auto-draw-toggle" title="Automatically clean up freehand drawings into Pedro paths"><input type="checkbox" checked={autoAfterDraw} onChange={e=>setAutoAfterDraw(e.target.checked)}/>Auto-build after drawing</label>
             <button onClick={undo} disabled={!history.length} title="Undo"><Undo2 size={15} />Undo</button>
             <button onClick={() => { updatePoints(seedWaypoints()); setSelectedId(null) }} title="Reset demo path"><RotateCcw size={15} />Reset</button>
