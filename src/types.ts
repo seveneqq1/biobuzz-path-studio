@@ -20,6 +20,10 @@ export interface Waypoint extends Point2D {
   headingLocked?:boolean
   action?: PathAction
   curve?: { endId: string; c1: Point2D; c2: Point2D }
+  // Pedro-visualizer control points for the path leaving this waypoint.
+  // [] is a straight line; when present it overrides `curve` and auto handles.
+  controlPoints?: Point2D[]
+  autoReason?: string
 }
 
 export interface SegmentDecision {

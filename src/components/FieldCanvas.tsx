@@ -5,7 +5,8 @@ import { Arrow, Circle, Group, Image, Layer, Line, Rect, Shape, Stage, Text } fr
 import type Konva from 'konva'
 import { Crosshair, Hand, MousePointer2, PenTool, RotateCcw, ScanLine, ZoomIn, ZoomOut } from 'lucide-react'
 import type { ActionType, CanvasTool, PathAction, Point2D, SegmentDecision, Waypoint } from '../types'
-import { canvasToWorld, clamp, controls, editWaypoint, FIELD_PIXELS, normalizeDegrees, simplify, tangentDegrees, worldToCanvas } from '../lib/geometry'
+import { setControlPoints } from '../lib/smartPath'
+import { bezierAt, canvasToWorld, clamp, editWaypoint, segmentPoints, FIELD_PIXELS, normalizeDegrees, simplify, tangentDegrees, worldToCanvas } from '../lib/geometry'
 import type { RobotConfig } from '../lib/simulation'
 import { clearsWalls } from '../lib/walls'
 import { robotSupportCollision } from '../lib/supportCollisions'
@@ -23,6 +24,7 @@ interface Props {
   onSnapChange: (snap: boolean) => void
   onPointsChange: (points: Waypoint[]) => void
   onSelect: (id: string | null) => void
+  onStroke: (points: Waypoint[]) => void
 }
 
 const toolItems: { id: CanvasTool; label: string; icon: typeof MousePointer2 }[] = [
@@ -43,7 +45,7 @@ const actionKeys: { key: string; type: ActionType; label: string; color: string 
 const actionMeta = Object.fromEntries(actionKeys.map(action => [action.type, action])) as Record<ActionType, typeof actionKeys[number]>
 interface PendingAction { point: Point2D; sampleIndex: number; action: PathAction }
 
-export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,onConfigChange,theme,onToolChange, onSnapChange, onPointsChange, onSelect }: Props) {
+export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,onConfigChange,theme,onToolChange, onSnapChange, onPointsChange, onSelect, onStroke }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const simulation=useSimulation(points,config,onConfigChange,theme,{selectedId,onSelect,onPointsChange})
   const supportMarker=simulation.route.supportCollision?worldToCanvas(simulation.route.supportCollision.sample):null
@@ -211,8 +213,7 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,
         interpolation: 'auto' as const,
         controlWeight: 1,
       }))
-      onPointsChange(next)
-      onSelect(next[0].id)
+      onStroke(next)
     }
     setStroke([])
     strokeRef.current = []
@@ -228,9 +229,18 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,
 
   const pathShapes = useMemo(() => points.slice(0, -1).map((point, index) => {
     const next = points[index + 1]
-    const { c1, c2 } = controls(points, index)
-    return { index, point, next, c1, c2 }
+    const pts = segmentPoints(points, index)
+    return { index, point, next, pts, canvas: pts.map(worldToCanvas), mid: worldToCanvas(bezierAt(pts, .5)) }
   }), [points])
+  const selectedIndex = points.findIndex(point => point.id === selectedId)
+  const editableSegments = selectedIndex < 0 ? [] : [selectedIndex - 1, selectedIndex].filter(i => i >= 0 && i < points.length - 1)
+  const traceSegment = (ctx: Konva.Context, canvas: Point2D[]) => {
+    ctx.beginPath(); ctx.moveTo(canvas[0].x, canvas[0].y)
+    if (canvas.length === 2) ctx.lineTo(canvas[1].x, canvas[1].y)
+    else if (canvas.length === 3) ctx.quadraticCurveTo(canvas[1].x, canvas[1].y, canvas[2].x, canvas[2].y)
+    else if (canvas.length === 4) ctx.bezierCurveTo(canvas[1].x, canvas[1].y, canvas[2].x, canvas[2].y, canvas[3].x, canvas[3].y)
+    else for (let i = 1; i <= 64; i++) { const p = bezierAt(canvas, i / 64); ctx.lineTo(p.x, p.y) }
+  }
 
   const updatePoint = (id: string, changes: Partial<Waypoint>) => onPointsChange(editWaypoint(points,id,changes))
 
@@ -278,15 +288,31 @@ export function FieldCanvas({ points, decisions, selectedId, tool, snap, config,
         <Image image={fieldImage ?? undefined} width={FIELD_PIXELS} height={FIELD_PIXELS} listening={false} />
         {Array.from({ length: 25 }).map((_, i) => <Line key={`v${i}`} points={[i * 30, 0, i * 30, FIELD_PIXELS]} stroke="rgba(160,190,195,.18)" strokeWidth={i % 4 === 0 ? 1.3 : .55} listening={false} />)}
         {Array.from({ length: 25 }).map((_, i) => <Line key={`h${i}`} points={[0, i * 30, FIELD_PIXELS, i * 30]} stroke="rgba(160,190,195,.18)" strokeWidth={i % 4 === 0 ? 1.3 : .55} listening={false} />)}
-        {pathShapes.map(({ index, point, next, c1, c2 }) => {
-          const p0 = worldToCanvas(point); const p1 = worldToCanvas(c1); const p2 = worldToCanvas(c2); const p3 = worldToCanvas(next)
+        {pathShapes.map(({ index, point, next, canvas, mid }) => {
           const selected = selectedId === point.id || selectedId === next.id
           const unsafe=simulation.route.unsafeSegments.includes(index)
           return <Group key={next.id}>
-            <Shape sceneFunc={(ctx, shape) => { ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y); ctx.fillStrokeShape(shape) }} stroke="#09141b" strokeWidth={11} lineCap="round" listening={false} />
-            <Shape sceneFunc={(ctx, shape) => { ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y); ctx.fillStrokeShape(shape) }} stroke={unsafe?'#ff6b72':selected ? '#6ee7f2' : '#f2c94c'} strokeWidth={unsafe?7:5} lineCap="round" dash={unsafe?[12,5]:decisions[index]?.type === 'piecewise' ? [16, 7] : undefined} listening={false} />
-            <Circle x={(p0.x + p3.x) / 2} y={(p0.y + p3.y) / 2} radius={12} fill="#f2c94c" stroke="#0d1e28" strokeWidth={2} listening={false} />
-            <Text x={(p0.x + p3.x) / 2 - 13} y={(p0.y + p3.y) / 2 - 12} text={`${index + 1}`} width={26} height={24} align="center" verticalAlign="middle" fill="#08161f" fontSize={13} fontStyle="bold" listening={false} />
+            <Shape sceneFunc={(ctx, shape) => { traceSegment(ctx, canvas); ctx.fillStrokeShape(shape) }} stroke="#09141b" strokeWidth={11} lineCap="round" listening={false} />
+            <Shape sceneFunc={(ctx, shape) => { traceSegment(ctx, canvas); ctx.fillStrokeShape(shape) }} stroke={unsafe?'#ff6b72':selected ? '#6ee7f2' : '#f2c94c'} strokeWidth={unsafe?7:5} lineCap="round" dash={unsafe?[12,5]:decisions[index]?.type === 'piecewise' ? [16, 7] : undefined} listening={false} />
+            <Circle x={mid.x} y={mid.y} radius={12} fill="#f2c94c" stroke="#0d1e28" strokeWidth={2} listening={false} />
+            <Text x={mid.x - 13} y={mid.y - 12} text={`${index + 1}`} width={26} height={24} align="center" verticalAlign="middle" fill="#08161f" fontSize={13} fontStyle="bold" listening={false} />
+          </Group>
+        })}
+        {tool === 'select' && editableSegments.map(index => {
+          const { canvas, pts } = pathShapes[index]
+          const inner = canvas.slice(1, -1)
+          return <Group key={`ctrl-${points[index].id}`}>
+            <Line points={canvas.flatMap(p => [p.x, p.y])} stroke="#b69cff" strokeWidth={1.5} dash={[6, 5]} listening={false} />
+            {inner.map((handle, j) => <Rect
+              key={j} x={handle.x} y={handle.y} width={13} height={13} offsetX={6.5} offsetY={6.5} rotation={45}
+              fill="#b69cff" stroke="#08161f" strokeWidth={2} draggable
+              onDragMove={event => {
+                const world = canvasToWorld({ x: event.target.x(), y: event.target.y() }, snap)
+                onPointsChange(setControlPoints(points, index, pts.slice(1, -1).map((c, k) => k === j ? world : c)))
+              }}
+              onDblClick={() => onPointsChange(setControlPoints(points, index, pts.slice(1, -1).filter((_, k) => k !== j)))}
+              onDblTap={() => onPointsChange(setControlPoints(points, index, pts.slice(1, -1).filter((_, k) => k !== j)))}
+            />)}
           </Group>
         })}
         {supportMarker && <Group x={supportMarker.x} y={supportMarker.y} listening={false}><Circle radius={14} fill="#253039" stroke="#ff9380" strokeWidth={3}/><Line points={[-5,-5,5,5,0,0,-5,5,5,-5]} stroke="#ff9380" strokeWidth={2}/><Text text="Support clearance" x={18} y={-7} fill="#ffc1a4" fontSize={12}/></Group>}

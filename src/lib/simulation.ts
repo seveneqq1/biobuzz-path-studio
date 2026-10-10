@@ -1,6 +1,6 @@
 import type { Point2D, Waypoint } from '../types'
-import { clamp, controls, distance, shortestAngle, tangentDegrees } from './geometry'
-import { cubic, curveArc } from './curveFit'
+import { bezierAt, clamp, distance, segmentPoints, shortestAngle, tangentDegrees } from './geometry'
+import { curveArc } from './curveFit'
 import { analyzePath } from './optimizer'
 import { addCellPiece, advanceHive, cellOpening, createHive, GRAVITY, HIVE, hiveToLocal, pieceMass, pieceRadius } from './hivePhysics'
 import type { Hive } from './hivePhysics'
@@ -26,12 +26,12 @@ export function profile(points:Waypoint[],config:RobotConfig) {
   const decisions=analyzePath(points)
   const actions=routeActions(points,config.shootWhileMoving)
   for(let i=0;i<points.length-1;i++) {
-    const {c1,c2}=controls(points,i)
-    const arc=curveArc(points[i],c1,c2,points[i+1]),joinT=arc.parameterAt(.68)
-    const joinHeading=tangentDegrees(cubic(points[i],c1,c2,points[i+1],joinT-.001),cubic(points[i],c1,c2,points[i+1],joinT+.001))
+    const pts=segmentPoints(points,i)
+    const arc=curveArc(...pts),joinT=arc.parameterAt(.68)
+    const joinHeading=tangentDegrees(bezierAt(pts,joinT-.001),bezierAt(pts,joinT+.001))
     for(let j= i===0 ? 0:1;j<=80;j++) {
-      const t=j/80, p=cubic(points[i],c1,c2,points[i+1],t)
-      const before=cubic(points[i],c1,c2,points[i+1],Math.max(0,t-.001)),after=cubic(points[i],c1,c2,points[i+1],Math.min(1,t+.001))
+      const t=j/80, p=bezierAt(pts,t)
+      const before=bezierAt(pts,Math.max(0,t-.001)),after=bezierAt(pts,Math.min(1,t+.001))
       const tangent=tangentDegrees(before,after), type=decisions[i].type
       const progress=arc.completionAt(t)
       let heading=points[i].heading+shortestAngle(points[i].heading,points[i+1].heading)*progress

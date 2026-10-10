@@ -1,5 +1,5 @@
 import type { Point2D, Waypoint } from '../types'
-import { controls, distance } from './geometry'
+import { bezierAt, distance, segmentPoints } from './geometry'
 
 export function cubic(a: Point2D, b: Point2D, c: Point2D, d: Point2D, t: number): Point2D {
   const u = 1 - t
@@ -9,11 +9,11 @@ export function cubic(a: Point2D, b: Point2D, c: Point2D, d: Point2D, t: number)
 
 // Pedro 3 linear/piecewise interpolation uses travelled arc length, not raw
 // Bézier parameter. This table keeps the planner's heading/timing estimate aligned.
-export function curveArc(a: Point2D, b: Point2D, c: Point2D, d: Point2D) {
+export function curveArc(...pts: Point2D[]) {
   const count=240,lengths=[0]
-  let previous=a
+  let previous=pts[0]
   for(let i=1;i<=count;i++){
-    const point=cubic(a,b,c,d,i/count);lengths.push(lengths[i-1]+distance(previous,point));previous=point
+    const point=bezierAt(pts,i/count);lengths.push(lengths[i-1]+distance(previous,point));previous=point
   }
   const total=lengths[count]||1
   const completionAt=(t:number)=>{
@@ -102,14 +102,14 @@ export function optimizeCurves(points: Waypoint[], tolerance=.2): Waypoint[] {
   for(let b=1;b<boundaries.length;b++) {
     const first=boundaries[b-1], last=boundaries[b], samples: Point2D[]=[]
     for(let i=first;i<last;i++) {
-      const {c1,c2}=controls(points,i)
-      for(let j=0;j<80;j++) samples.push(cubic(points[i],c1,c2,points[i+1],j/80))
+      const pts=segmentPoints(points,i)
+      for(let j=0;j<80;j++) samples.push(bezierAt(pts,j/80))
     }
     samples.push(points[last])
     const curves=fit(samples,0,samples.length-1,unit(samples[0],samples[1]),unit(samples.at(-1)!,samples.at(-2)!),tolerance)
-    const chunk: Waypoint[]=[{...points[first],curve:undefined}]
+    const chunk: Waypoint[]=[{...points[first],curve:undefined,controlPoints:undefined}]
     for(const curve of curves) {
-      const end: Waypoint=curve.last===samples.length-1 ? {...points[last],curve:undefined} : {
+      const end: Waypoint=curve.last===samples.length-1 ? {...points[last],curve:undefined,controlPoints:undefined} : {
         ...samples[curve.last],id:crypto.randomUUID(),heading:points[Math.min(last,first+Math.round(curve.last/80))].heading,interpolation:'auto',controlWeight:1,
       }
       chunk[chunk.length-1].curve={endId:end.id,c1:curve.c1,c2:curve.c2}

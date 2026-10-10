@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Download, Hexagon, Moon, Route, RotateCcw, Sparkles, Sun, Undo2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Download, Hexagon, Moon, Route, RotateCcw, Sparkles, Sun, Undo2, Wand2 } from 'lucide-react'
 import { FieldCanvas } from './components/FieldCanvas'
 import { Inspector } from './components/Inspector'
 import { CodePanel } from './components/CodePanel'
 import { editWaypoint, seedWaypoints } from './lib/geometry'
-import { optimizeCurves } from './lib/curveFit'
 import { analyzePath } from './lib/optimizer'
 import { downloadJava, generateJava } from './lib/codegen'
 import type { CanvasTool, Waypoint } from './types'
-import { defaultConfig, profile } from './lib/simulation'
+import { defaultConfig } from './lib/simulation'
+import { addControlPoint, autoBuild, bestHeadings, closenessOptions, removeControlPoint, setControlPoints } from './lib/smartPath'
+import type { Closeness } from './lib/smartPath'
 import { nearestSafePose } from './lib/safeSpot'
 
 export default function App() {
@@ -18,14 +19,16 @@ export default function App() {
   const [tool, setTool] = useState<CanvasTool>('select')
   const [snap, setSnap] = useState(false)
   const [config,setConfig]=useState(defaultConfig)
-  const [tolerance,setTolerance]=useState(.2)
   const [theme,setTheme]=useState<'light'|'dark'>(()=>{
     try { const saved=localStorage.getItem('sana-theme');if(saved==='light'||saved==='dark')return saved } catch { /* storage may be disabled */ }
     return window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'
   })
   useEffect(()=>{document.documentElement.dataset.theme=theme;try{localStorage.setItem('sana-theme',theme)}catch{/* optional persistence */}},[theme])
   const [optimized, setOptimized] = useState(false)
-  const [pathOptimizationLabel, setPathOptimizationLabel] = useState('Optimize path')
+  const [closeness, setCloseness] = useState<Closeness>('balanced')
+  const [autoAfterDraw, setAutoAfterDraw] = useState(true)
+  const [toast, setToast] = useState('')
+  const toastTimer = useRef<number | undefined>(undefined)
   const [snapMessage,setSnapMessage]=useState('')
   const [snappedId,setSnappedId]=useState<string|null>(null)
   const decisions = useMemo(() => analyzePath(points), [points])
@@ -49,19 +52,24 @@ export default function App() {
     setPoints(previous)
     setHistory(current => current.slice(0, -1))
   }
+  const flash = (message: string) => {
+    setToast(message)
+    window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(''), 4500)
+  }
   const optimize = () => {
-    updatePoints(points.map((point, index) => index === 0 ? point : { ...point, interpolation: 'auto' }))
+    updatePoints(bestHeadings(points, config))
     setOptimized(true)
+    flash('Headings chosen by simulating each option against drive/turn limits and obstacles.')
     window.setTimeout(() => setOptimized(false), 1700)
   }
-  const optimizePath = () => {
-    const before = points.length
-    const next = optimizeCurves(points,tolerance)
-    const original=profile(points,config),fitted=profile(next,config)
-    if((!original.wallCollision&&fitted.wallCollision)||(!original.supportCollision&&fitted.supportCollision)){setPathOptimizationLabel('Fit rejected: obstacle clearance');return}
-    updatePoints(next)
-    setPathOptimizationLabel(next.length < before ? `${before} → ${next.length} points` : 'No reduction')
-    window.setTimeout(() => setPathOptimizationLabel('Optimize path'), 2000)
+  const build = (source: Waypoint[], fromDrawing = false) => {
+    const { points: next, report } = autoBuild(source, config, closeness)
+    if (fromDrawing) setHistory(current => [...current.slice(-19), points, source])
+    else setHistory(current => [...current.slice(-19), points])
+    setPoints(next)
+    setSelectedId(next[0]?.id ?? null)
+    flash(`${report.before} → ${report.after} points · ${report.sections} path${report.sections === 1 ? '' : 's'} · ${report.controls} control points · ${report.drive.toFixed(1)} s drive${report.snapped ? ` · ${report.snapped} point${report.snapped === 1 ? '' : 's'} moved to safety` : ''} · ${report.clear ? 'clear of obstacles ✓' : 'still touches an obstacle — adjust it'}`)
   }
 
   return <div className="app-shell">
@@ -73,10 +81,10 @@ export default function App() {
       <div className="header-controls">
         <span className="season-select">BIOBUZZ 2026–27</span>
         <button className="theme-toggle" aria-label={theme==='light'?'Switch to dark theme':'Switch to light theme'} title={theme==='light'?'Dark theme':'Light theme'} onClick={()=>setTheme(theme==='light'?'dark':'light')}>{theme==='light'?<Moon size={17}/>:<Sun size={17}/>}</button>
-        <select className="fit-precision" aria-label="Path fitting tolerance" value={tolerance} onChange={e=>setTolerance(Number(e.target.value))} title="Maximum fitting error target in inches"><option value={.1}>0.1 in fit</option><option value={.2}>0.2 in fit</option><option value={.35}>0.35 in fit</option><option value={.5}>0.5 in fit</option></select>
-        <button className="secondary-button path-optimize-button" onClick={optimizePath}><Route size={16} />{pathOptimizationLabel}</button>
-        <button className="secondary-button interpolation-optimize-button" aria-label="Optimize interpolations" onClick={optimize}><Sparkles size={16} /><span className="desktop-label">{optimized ? 'Optimized' : 'Optimize interpolations'}</span><span className="mobile-label">{optimized ? 'Done' : 'Headings'}</span></button>
-        <button className="primary-button" onClick={() => downloadJava(code)}><Download size={16} />Export Java</button>
+        <select className="fit-precision" aria-label="Path style" value={closeness} onChange={e=>setCloseness(e.target.value as Closeness)} title="How closely Auto-build should follow your drawing versus driving faster">{closenessOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select>
+        <button className="primary-button auto-build-button" onClick={()=>build(points)} title="Turn the route into start/end points with control points, avoid walls and hive supports, and pick the fastest headings"><Wand2 size={16} />Auto-build path</button>
+        <button className="secondary-button interpolation-optimize-button" aria-label="Pick best headings" onClick={optimize} title="Simulate every heading interpolation and keep the fastest collision-free one"><Sparkles size={16} /><span className="desktop-label">{optimized ? 'Done' : 'Best headings'}</span><span className="mobile-label">{optimized ? 'Done' : 'Headings'}</span></button>
+        <button className="secondary-button" onClick={() => downloadJava(code)}><Download size={16} />Export Java</button>
       </div>
     </header>
 
@@ -85,6 +93,7 @@ export default function App() {
         <div className="section-bar">
           <div><Route size={15}/>Your route <small>{Math.max(0, points.length - 1)} segments · {points.filter(point => point.action).length} commands</small></div>
           <div className="section-actions">
+            <label className="auto-draw-toggle" title="Automatically clean up freehand drawings into Pedro paths"><input type="checkbox" checked={autoAfterDraw} onChange={e=>setAutoAfterDraw(e.target.checked)}/>Auto-build after drawing</label>
             <button onClick={undo} disabled={!history.length} title="Undo"><Undo2 size={15} />Undo</button>
             <button onClick={() => { updatePoints(seedWaypoints()); setSelectedId(null) }} title="Reset demo path"><RotateCcw size={15} />Reset</button>
           </div>
@@ -93,7 +102,9 @@ export default function App() {
           points={points} decisions={decisions} selectedId={selectedId} tool={tool} snap={snap}
           config={config} onConfigChange={setConfig} theme={theme}
           onToolChange={setTool} onSnapChange={setSnap} onPointsChange={updatePoints} onSelect={setSelectedId}
+          onStroke={stroke => autoAfterDraw ? build(stroke, true) : updatePoints(stroke)}
         />
+        {toast && <div className="build-toast" role="status">{toast}</div>}
       </div>
 
       <aside className="right-column">
@@ -101,6 +112,11 @@ export default function App() {
           <Inspector
             point={selectedPoint} index={selectedIndex} decision={selectedDecision}
             onChange={updateSelected}
+            isLast={selectedIndex===points.length-1}
+            controlCount={selectedIndex>=0&&selectedIndex<points.length-1?(points[selectedIndex].controlPoints?.length??null):null}
+            onAddControl={()=>updatePoints(addControlPoint(points,selectedIndex))}
+            onRemoveControl={()=>updatePoints(removeControlPoint(points,selectedIndex))}
+            onStraighten={()=>updatePoints(setControlPoints(points,selectedIndex,[]))}
             snapMessage={snappedId===selectedId?snapMessage:''}
             shootWhileMoving={config.shootWhileMoving&&selectedIndex<points.length-1}
             onSnapSafe={()=>{

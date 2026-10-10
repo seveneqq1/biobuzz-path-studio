@@ -42,6 +42,21 @@ export function controls(points: Waypoint[], index: number) {
   }
 }
 
+// Full Bézier control polygon [start, ...controls, end] for segment `index`.
+export function segmentPoints(points: Waypoint[], index: number): Point2D[] {
+  const a = points[index], b = points[index + 1]
+  if (a.controlPoints) return [a, ...a.controlPoints, b]
+  const { c1, c2 } = controls(points, index)
+  return [a, c1, c2, b]
+}
+
+export function bezierAt(pts: Point2D[], t: number): Point2D {
+  const work = pts.map(p => ({ x: p.x, y: p.y }))
+  for (let level = work.length - 1; level > 0; level--)
+    for (let i = 0; i < level; i++) work[i] = { x: work[i].x + (work[i + 1].x - work[i].x) * t, y: work[i].y + (work[i + 1].y - work[i].y) * t }
+  return work[0]
+}
+
 // Move adjacent fitted handles with their anchor; unrelated optimized curves
 // must not revert to Catmull-Rom just because one waypoint was inspected/edited.
 export function editWaypoint(points: Waypoint[], id: string, changes: Partial<Waypoint>) {
