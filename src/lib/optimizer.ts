@@ -1,13 +1,13 @@
 import type { SegmentDecision, Waypoint } from '../types'
-import { controls, distance, shortestAngle, tangentDegrees } from './geometry'
+import { bezierAt, distance, segmentPoints, shortestAngle, tangentDegrees } from './geometry'
 
 export function analyzeSegment(points: Waypoint[], index: number): SegmentDecision {
   const start = points[index]
   const end = points[index + 1]
-  const { c1, c2 } = controls(points, index)
+  const pts = segmentPoints(points, index)
   const length = Math.max(distance(start, end), 0.1)
-  const startTangent = tangentDegrees(start, c1)
-  const endTangent = tangentDegrees(c2, end)
+  const startTangent = tangentDegrees(bezierAt(pts, 0), bezierAt(pts, .02))
+  const endTangent = tangentDegrees(bezierAt(pts, .98), bezierAt(pts, 1))
   const curvature = Math.abs(shortestAngle(startTangent, endTangent))
   const headingDelta = Math.abs(shortestAngle(start.heading, end.heading))
   const rotationRate = headingDelta / length
@@ -15,7 +15,7 @@ export function analyzeSegment(points: Waypoint[], index: number): SegmentDecisi
 
   if (manual !== 'auto') return {
     type: manual,
-    reason: `Manual override on waypoint ${index + 2}.`,
+    reason: end.autoReason ?? `Manual override on waypoint ${index + 2}.`,
     curvature,
     rotationRate,
   }

@@ -24,6 +24,17 @@ npm run dev
 
 Open the localhost URL printed by Vite (usually http://localhost:5173). Keep the terminal running; press Ctrl+C to stop. On Windows, if PowerShell blocks `npm.ps1`, use Command Prompt for the same commands. Use `npm run test`, `npm run lint`, and `npm run build` to check the project.
 
+## Quick start: Auto-build
+
+1. Pick the **Draw** tool and sketch your route (press `1`–`5` while drawing to drop commands).
+2. When you release, **Auto-build** runs automatically (toggle "Auto-build after drawing" to turn it off). You can also click **Auto-build path** anytime.
+3. Choose a style in the header: **Follow my drawing**, **Balanced** or **Fastest**.
+4. Click **Export Java** for a Pedro 3 + Ivy OpMode.
+
+Auto-build works like the Pedro Pathing visualizer: the route becomes one path between each pair of *major points* (start, every command point, any pose whose heading you edited, and the end). Each path gets the fewest control points that stay close to your drawing. The planner then checks the robot's rotated footprint (+1 in buffer) against walls and hive supports and bends the path away from anything it hits. Unsafe major points are moved to the nearest safe spot. Among the clear candidates, it picks the best trade-off between simulated drive time (motor RPM, wheel size, mass, traction, curvature and turn limits) and closeness to your sketch. **Best headings** simulates every valid heading interpolation (constant, linear, tangent, piecewise) for each path and keeps the fastest collision-free option. The inspector explains why each option was chosen.
+
+Select a waypoint to see the purple control points of its paths. Drag them to bend the path, double-click to delete one, or use **Add control / Remove / Straight** in the inspector. Control points export as `Paths.curve(start, p.of(...), ..., end)`; zero control points export as `Paths.line`. The generated class also has a `MIRROR_FOR_OTHER_ALLIANCE` switch that mirrors every pose through `PoseFactory.mirrorY(72)`.
+
 ## Features
 
 - 144 × 144 inch BIOBUZZ field schematic with Pedro's bottom-left origin

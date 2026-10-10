@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --import tsx --test src/lib/physics.test.ts src/lib/codegen.test.ts",
+    "test": "node --import tsx --test src/lib/physics.test.ts src/lib/codegen.test.ts src/lib/smartPath.test.ts",
     "test:java": "node --import tsx scripts/verify-java.ts",
     "dev": "vite",
     "build": "tsc -b && vite build",

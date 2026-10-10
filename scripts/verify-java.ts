@@ -74,6 +74,7 @@ for(let variant=0;variant<3;variant++){
   const points=Array.from({length:6},(_,i)=>node(i))
   points[1].interpolation='linear';points[2].interpolation='constant';points[3].interpolation='tangent';points[4].interpolation='piecewise'
   points[0].curve={endId:'1',c1:{x:25,y:42},c2:{x:29,y:47}}
+  if(variant===2){points[2].controlPoints=[{x:55,y:60},{x:62,y:40},{x:70,y:58}];points[4].controlPoints=[]}
   points[0].action={type:'intake',composition:variant===0?'sequential':variant===1?'parallel':'deadline'}
   points[1].action={type:'shoot',timeoutMs:5000}
   points[2].action={type:'transfer',composition:'parallel'}

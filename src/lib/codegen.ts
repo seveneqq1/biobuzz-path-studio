@@ -1,5 +1,5 @@
 import type { PathAction, SegmentDecision, Waypoint } from '../types'
-import { controls } from './geometry'
+import { segmentPoints } from './geometry'
 import { compileRoute, routeActions } from './route'
 import { defaultConfig, profile } from './simulation'
 import type { RobotConfig } from './simulation'
@@ -29,13 +29,14 @@ export function generateJava(points: Waypoint[], decisions: SegmentDecision[],co
   const fields = points.map((point, index) => `    private final Pose ${poseName(index)} = p.of(${n(point.x)}, ${n(point.y)}, ${n(point.heading)});`).join('\n')
   const pathMethods = paths.map(item => {
     const segments = points.slice(item.startIndex, item.endIndex).map((a, offset) => {
-      const index = item.startIndex + offset, b = points[index + 1], {c1, c2} = controls(points, index)
+      const index = item.startIndex + offset, b = points[index + 1], inner = segmentPoints(points, index).slice(1, -1)
       const cross = (p: {x: number; y: number}) => Math.abs((b.x-a.x)*(p.y-a.y)-(b.y-a.y)*(p.x-a.x))
       const span=(b.x-a.x)**2+(b.y-a.y)**2
       const along=(p:{x:number;y:number})=>(p.x-a.x)*(b.x-a.x)+(p.y-a.y)*(b.y-a.y)
-      const straight = cross(c1) < 1e-8 && cross(c2) < 1e-8 && along(c1)>=0 && along(c2)<=span && along(c2)>=along(c1) && !a.curve
+      const straight = a.controlPoints ? !a.controlPoints.length
+        : inner.every(c => cross(c) < 1e-8 && along(c) >= 0 && along(c) <= span) && along(inner[1]) >= along(inner[0]) && !a.curve
       const geometry = straight ? `Paths.line(${poseName(index)}, ${poseName(index + 1)})`
-        : `Paths.curve(${poseName(index)}, p.of(${n(c1.x)}, ${n(c1.y)}, 0),\n                p.of(${n(c2.x)}, ${n(c2.y)}, 0), ${poseName(index + 1)})`
+        : `Paths.curve(${poseName(index)},\n${inner.map(c => `                p.of(${n(c.x)}, ${n(c.y)}, 0),`).join('\n')}\n                ${poseName(index + 1)})`
       return `            ${geometry}${interpolation(decisions[index], index, index + 1, points)}`
     })
     return `    private Path ${item.name}() {\n        return Paths.path(\n${segments.join(',\n')}\n        );\n    }`
@@ -160,7 +161,13 @@ import org.firstinspires.ftc.teamcode.pedro.Constants;
 public class SanaAuto extends OpMode {
     private Follower follower;
     private Command auto;
-    private final PoseFactory p = PoseFactory.degrees();
+    // Flip to true to run this route on the opposite alliance: every pose and
+    // control point is mirrored across the field midline (y = 72).
+    // Hive target hooks below are NOT mirrored; update them too.
+    private static final boolean MIRROR_FOR_OTHER_ALLIANCE = false;
+    private final PoseFactory p = MIRROR_FOR_OTHER_ALLIANCE
+        ? PoseFactory.degrees().mirrorY(72).mapHeading(h -> -h)
+        : PoseFactory.degrees();
 ${fields}
 
     // Shared requirement identities; replace with your subsystem objects if desired.

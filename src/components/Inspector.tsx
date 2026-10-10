@@ -1,4 +1,4 @@
-import { Gauge, Info, MapPin, RotateCw, SlidersHorizontal, Timer, Trash2, Zap } from 'lucide-react'
+import { Gauge, Info, MapPin, Minus, Plus, RotateCw, Slash, SlidersHorizontal, Spline, Timer, Trash2, Zap } from 'lucide-react'
 import type { ActionType, Interpolation, SegmentDecision, Waypoint } from '../types'
 import { clamp } from '../lib/geometry'
 
@@ -11,6 +11,11 @@ interface Props {
   onSnapSafe:()=>void
   snapMessage:string
   shootWhileMoving:boolean
+  isLast:boolean
+  controlCount:number|null
+  onAddControl:()=>void
+  onRemoveControl:()=>void
+  onStraighten:()=>void
 }
 
 const interpolationOptions: { value: Interpolation; label: string }[] = [
@@ -21,7 +26,7 @@ const interpolationOptions: { value: Interpolation; label: string }[] = [
   { value: 'piecewise', label: 'Piecewise' },
 ]
 
-export function Inspector({ point, index, decision, onChange, onDelete, onSnapSafe,snapMessage,shootWhileMoving }: Props) {
+export function Inspector({ point, index, decision, onChange, onDelete, onSnapSafe,snapMessage,shootWhileMoving,isLast,controlCount,onAddControl,onRemoveControl,onStraighten }: Props) {
   if (!point) return <div className="inspector-empty">
     <div className="empty-orbit"><MapPin size={23} /></div>
     <h3>No waypoint selected</h3>
@@ -98,19 +103,29 @@ export function Inspector({ point, index, decision, onChange, onDelete, onSnapSa
 
     <div className="field-group">
       <div className="group-title"><SlidersHorizontal size={15} /><span>Arrival interpolation</span>{index === 0 && <small>start node</small>}</div>
-      <select value={point.interpolation} disabled={index === 0} onChange={e => onChange({ interpolation: e.target.value as Interpolation })}>
+      <select value={point.interpolation} disabled={index === 0} onChange={e => onChange({ interpolation: e.target.value as Interpolation, autoReason: undefined })}>
         {interpolationOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
       </select>
       {index > 0 && decision && <div className={`decision-note ${point.interpolation !== 'auto' ? 'manual' : ''}`}>
         <Info size={15} />
-        <div><strong>{point.interpolation === 'auto' ? `Optimizer chose ${decision.type}` : `${decision.type} override`}</strong><p>{decision.reason}</p></div>
+        <div><strong>{point.interpolation === 'auto' ? `Optimizer chose ${decision.type}` : point.autoReason ? `Simulator chose ${decision.type}` : `${decision.type} override`}</strong><p>{decision.reason}</p></div>
       </div>}
     </div>
 
-    <div className="field-group">
+    {!isLast && <div className="field-group">
+      <div className="group-title"><Spline size={15} /><span>Path to next point</span><small>{controlCount === null ? 'auto handles' : controlCount === 0 ? 'straight line' : `${controlCount} control point${controlCount === 1 ? '' : 's'}`}</small></div>
+      <div className="control-buttons">
+        <button onClick={onAddControl}><Plus size={14} />Add control</button>
+        <button onClick={onRemoveControl} disabled={controlCount === 0}><Minus size={14} />Remove</button>
+        <button onClick={onStraighten} disabled={controlCount === 0}><Slash size={14} />Straight</button>
+      </div>
+      <p className="inspector-help">Like the Pedro visualizer: drag the square control points on the field to bend this path. Double-click a control point to delete it.</p>
+    </div>}
+
+    {controlCount === null && !isLast && <div className="field-group">
       <div className="group-title"><Gauge size={15} /><span>Bézier tension</span><small>{point.controlWeight.toFixed(2)}×</small></div>
       <input className="weight-range" type="range" min="0.25" max="1.75" step="0.05" value={point.controlWeight} onChange={e => numberChange('controlWeight', e.target.value)} />
       <div className="range-labels"><span>Tighter</span><span>Longer handles</span></div>
-    </div>
+    </div>}
   </div>
 }
